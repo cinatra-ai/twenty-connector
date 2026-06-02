@@ -1,0 +1,43 @@
+{
+  "name": "@cinatra-ai/twenty-connector",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "server-only": "0.0.1",
+    "tailwind-merge": "^3.5.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "@cinatra-ai/sdk-extensions": "*",
+    "@cinatra-ai/sdk-ui": "*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.6"
+  },
+  "cinatra": {
+    "apiVersion": "cinatra.ai/v1",
+    "kind": "connector",
+    "displayName": "Twenty CRM",
+    "dependencies": [
+      {
+        "packageName": "@cinatra-ai/crm-connector",
+        "kind": "connector",
+        "edgeType": "runtime",
+        "versionConstraint": {
+          "kind": "semver-range",
+          "range": "*"
+        },
+        "requirement": "required"
+      }
+    ]
+  }
+}
