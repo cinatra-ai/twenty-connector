@@ -4,9 +4,10 @@ Twenty CRM provider for cinatra. Implements the `CrmConnector` interface from `@
 
 ## Works with
 
-- `@cinatra-ai/sdk-extensions` (CRM contract + provider registry)
-- `@cinatra-ai/crm-connector` (the facade that resolves this provider)
+- `@cinatra-ai/crm-connector` (the facade extension that resolves this provider)
 - Self-hosted Twenty (`twentycrm/twenty:v2.7.3`, via the docker stack in `docker-compose.yml --profile twenty`)
+
+> Built on the host-provided `@cinatra-ai/sdk-extensions` SDK (the `CrmConnector` contract + provider registry) — that's the platform SDK, not an installable extension, so it isn't listed above.
 
 ## Capabilities
 
