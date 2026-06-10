@@ -26,5 +26,9 @@ jobs:
       contents: read
       id-token: write       # build-provenance attestation
       attestations: write
-    uses: cinatra-ai/.github/.github/workflows/reusable-extension-release.yml@main
+    # cinatra-ai/.github has no version tags yet; pinned to its main HEAD at
+    # authoring time (020b09b). The trailing marker is the untagged-repo pin
+    # convention: a zero-version semver pre-release form (passes the
+    # actions-pinned-gate format check) encoding branch + short SHA.
+    uses: cinatra-ai/.github/.github/workflows/reusable-extension-release.yml@020b09b7a15cb96a434db489f2a102ce26ff45d7 # v0.0.0-main.020b09b
     secrets: inherit
