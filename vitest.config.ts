@@ -12,7 +12,12 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    // scripts/twenty-bootstrap carries the Twenty bootstrap/cutover operator
+    // tooling; its guard tests are plain-node (vitest + pg only) and run
+    // standalone in .github/workflows/twenty-bootstrap-proof.yml, which
+    // installs pg ephemerally (NOT a declared devDependency — the cinatra
+    // monorepo lockfile must keep matching this package.json).
+    include: ["src/**/*.test.ts", "scripts/**/__tests__/**/*.test.mjs"],
     // The raw-mcp-exposure test imports @/lib/* and requires DB mocking
     // that this package's vitest config does not provide. Excluded for
     // now (status quo: this test was never actually running pre-this-PR).

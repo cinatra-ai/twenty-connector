@@ -1,0 +1,120 @@
+# Twenty CRM bootstrap proof.
+#
+# The proof scripts live in THIS repo (scripts/twenty-bootstrap/) but exercise
+# a cinatra core dev stack: the docker compose twenty profile, the shared
+# dev-content fixtures, and the Twenty keygen helpers all live in
+# cinatra-ai/cinatra. The job therefore checks out BOTH repos and runs the
+# proof from the core checkout root (CINATRA_CORE_ROOT defaults to cwd).
+#
+# Triggers: PRs/pushes touching the bootstrap tooling here, plus a weekly
+# scheduled run that catches core-side drift (docker-compose twenty profile,
+# fixture/keygen helper changes in cinatra-ai/cinatra) between PRs to this
+# repo.
+
+name: Twenty Bootstrap Proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/twenty-bootstrap/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "vitest.config.ts"
+      - ".github/workflows/twenty-bootstrap-proof.yml"
+  pull_request:
+    paths:
+      - "scripts/twenty-bootstrap/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "vitest.config.ts"
+      - ".github/workflows/twenty-bootstrap-proof.yml"
+  schedule:
+    - cron: "0 6 * * 1" # weekly core-drift check (06:00 UTC Monday)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: twenty-bootstrap-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cutover-guard-tests:
+    name: Cutover guard tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Install test dependencies (ephemeral)
+        # First-party source mirror (the cinatra monorepo provides the optional
+        # @cinatra-ai/* peers and clones this repo into its workspace, where
+        # the monorepo lockfile must keep matching this package.json — so the
+        # test-only pg dependency is installed ephemerally here instead of
+        # being declared). The cutover guard tests are standalone: vitest + pg.
+        run: npm install --no-save --no-package-lock --no-audit --no-fund vitest@4.1.6 pg@8.20.0
+
+      - name: Cutover dev-DB guard tests
+        run: npx vitest run scripts/twenty-bootstrap/__tests__ --no-coverage
+
+  bootstrap-proof:
+    name: Twenty bootstrap proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TWENTY_TAG: v2.7.3
+      CINATRA_CI: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Checkout cinatra core (compose stack + shared helpers)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: cinatra-ai/cinatra
+          path: .cinatra-core
+
+      - name: Set up Node 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Pull Twenty image (pinned)
+        run: docker pull "twentycrm/twenty:${TWENTY_TAG}"
+
+      - name: Bring up Twenty stack
+        working-directory: .cinatra-core
+        run: |
+          docker compose --profile twenty up -d \
+            twenty-db twenty-redis twenty-server twenty-worker
+
+      - name: Wait for Twenty healthy
+        working-directory: .cinatra-core
+        run: bash "$GITHUB_WORKSPACE/scripts/twenty-bootstrap/wait-for-twenty-healthy.sh"
+
+      - name: Run bootstrap proof
+        working-directory: .cinatra-core
+        run: node "$GITHUB_WORKSPACE/scripts/twenty-bootstrap/twenty-bootstrap-proof.mjs"
+
+      - name: Snapshot drift check
+        run: |
+          git diff --exit-code scripts/twenty-bootstrap/twenty-mcp-tools.json || {
+            echo ""
+            echo "::error::Twenty MCP tools snapshot drifted. Re-run locally with UPDATE_SNAPSHOT=1, commit the new snapshot, and update the TWENTY_TAG pin."
+            exit 1
+          }
+
+      - if: always()
+        name: Twenty server logs (debug)
+        working-directory: .cinatra-core
+        run: docker compose --profile twenty logs --tail 200 twenty-server twenty-worker || true
+
+      - if: always()
+        name: Tear down Twenty stack
+        working-directory: .cinatra-core
+        run: docker compose --profile twenty down -v || true
