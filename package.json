@@ -4,6 +4,12 @@
   "license": "Apache-2.0",
   "type": "module",
   "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./register": "./src/register.ts",
+    "./mcp-module": "./src/mcp/module.ts",
+    "./setup-page": "./src/setup-page.tsx"
+  },
   "types": "./src/index.ts",
   "scripts": {
     "test": "vitest run"
@@ -46,6 +52,11 @@
         },
         "requirement": "required"
       }
-    ]
+    ],
+    "serverEntry": "./register",
+    "requestedHostPorts": [
+      "capabilities"
+    ],
+    "sdkAbiRange": "^2"
   }
 }
