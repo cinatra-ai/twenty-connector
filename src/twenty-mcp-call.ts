@@ -2,13 +2,19 @@ import "server-only";
 
 // Server-side helper for issuing a single MCP `execute_tool` call against the
 // live Twenty MCP server (`/mcp`), resolving the workspace-scope row +
-// upstream bearer from the external MCP registry.
+// upstream bearer from the external MCP registry READ surface on the
+// host-bound deps slot (cinatra#172 Stage H4 — bound at serverEntry
+// activation by `register(ctx)` adapting
+// `@cinatra-ai/host:external-mcp-registry`; `@/lib/external-mcp-registry`
+// stays host-side).
 //
 // Note: this helper bypasses the host-side Layer B proxy at
 // /api/external-mcp/proxy/[serverId]. That proxy is the LLM-facing
 // enforcement point — server-side code is trusted and can hit the upstream
 // directly. The proxy validates `toolName` against `allowed_catalog_tools`;
-// server-side callers are responsible for using the right tool names.
+// server-side callers are responsible for using the right tool names. The
+// minted bearer is in-process only and never crosses any wire boundary other
+// than the upstream Twenty call below (see the deps-slot TRUST note).
 //
 // All Twenty `execute_tool` calls take this shape:
 //   { jsonrpc: "2.0", id, method: "tools/call",
@@ -19,27 +25,22 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import {
-  getExternalMcpServerById,
-  listExternalMcpServers,
-  resolveExternalMcpServerBearer,
-  type ExternalMcpServerRecord,
-} from "@/lib/external-mcp-registry";
+import { getTwentyDeps, type ExternalMcpServerRecordShape } from "./deps";
 
 export const TWENTY_WORKSPACE_ROW_ID = "twenty-workspace";
 
 /** Resolve the live Twenty workspace row by id, or null if the dev-auto-setup
  *  hook hasn't inserted it yet. */
-export function getTwentyRow(): ExternalMcpServerRecord | null {
-  const byId = getExternalMcpServerById(TWENTY_WORKSPACE_ROW_ID);
+export function getTwentyRow(): ExternalMcpServerRecordShape | null {
+  const byId = getTwentyDeps().getServerById(TWENTY_WORKSPACE_ROW_ID);
   if (byId) return byId;
   // Fallback: if the operator named the row differently, find any enabled
   // workspace-scope row whose label starts with "Twenty" — useful in mixed
   // deployments without being too permissive.
   return (
-    listExternalMcpServers().find(
-      (r) => r.enabled && r.scope === "workspace" && /twenty/i.test(r.label),
-    ) ?? null
+    getTwentyDeps()
+      .listServers()
+      .find((r) => r.enabled && r.scope === "workspace" && /twenty/i.test(r.label)) ?? null
   );
 }
 
@@ -96,7 +97,7 @@ export async function executeTwentyMcpTool(
     throw new TwentyConfigError(`Twenty workspace row ${row.id} is disabled.`);
   }
 
-  const bearer = await resolveExternalMcpServerBearer(row);
+  const bearer = await getTwentyDeps().resolveBearer(row);
   const headers: Record<string, string> = {
     "content-type": "application/json",
     accept: "application/json, text/event-stream",

@@ -12,6 +12,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./register": "./src/register.ts",
+    "./deps": "./src/deps.ts",
     "./mcp-module": "./src/mcp/module.ts",
     "./setup-page": "./src/setup-page.tsx"
   },
