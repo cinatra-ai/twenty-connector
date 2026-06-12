@@ -18,12 +18,11 @@ export default defineConfig({
     // installs pg ephemerally (NOT a declared devDependency — the cinatra
     // monorepo lockfile must keep matching this package.json).
     include: ["src/**/*.test.ts", "scripts/**/__tests__/**/*.test.mjs"],
-    // The raw-mcp-exposure test imports @/lib/* and requires DB mocking
-    // that this package's vitest config does not provide. Excluded for
-    // now (status quo: this test was never actually running pre-this-PR).
-    exclude: [
-      "**/node_modules/**",
-      "src/__tests__/raw-mcp-exposure.test.ts",
-    ],
+    // (The raw-mcp-exposure proof that used to be excluded here — it imports
+    // @/lib/* and could never resolve it from this package sandbox — moved
+    // HOST-SIDE in cinatra#172 Stage H1: cinatra core
+    // src/lib/external-mcp/__tests__/raw-mcp-exposure.test.ts, where it
+    // actually runs under the root vitest include.)
+    exclude: ["**/node_modules/**"],
   },
 });
