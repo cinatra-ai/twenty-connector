@@ -57,8 +57,8 @@
         "kind": "connector",
         "edgeType": "runtime",
         "versionConstraint": {
-          "kind": "semver-range",
-          "range": "*"
+          "kind": "exact",
+          "version": "0.1.1"
         },
         "requirement": "required"
       }
