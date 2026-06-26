@@ -148,3 +148,25 @@ jobs:
         # Profile-1.0 BPMN compile / full OAS runtime-invariant validation /
         # trust+signature checks re-run marketplace-side at publish/install.
         run: node extension-kind-gate.mjs --package-root .
+
+  docs-contract-gate:
+    # Validate this repo's docs/ hub against the integration docs contract
+    # (authored in cinatra-ai/docs, enforced by cinatra-ai/ci) on every PR and
+    # push to main — i.e. BEFORE a release tag is ever cut. A docs/ directory
+    # that fails the contract must never publish into docs.cinatra.ai, and this
+    # gate is the pre-tag guard. The docs publish path re-runs the SAME gate at
+    # compile time against the tagged tree. The slug must equal this
+    # integration's registry slug ("twenty"), which is the URL segment for its
+    # hub at /integrations/twenty/.
+    #
+    # The reusable docs-contract-gate workflow exists only on cinatra-ai/ci's
+    # main HEAD (no release tag carries it yet), so the workflow ref AND the
+    # `ref` input are both pinned to that commit SHA (1e0b01d5, 2026). The
+    # trailing version-comment marker on the `uses:` line below satisfies the
+    # actions-pinned-gate format contract for this untagged-but-SHA-pinned ref,
+    # mirroring release.yml's pin convention in this repo.
+    uses: cinatra-ai/ci/.github/workflows/docs-contract-gate.yml@1e0b01d53cecb920550e92370f4f2b41f2eca997 # v0.1.0
+    with:
+      docs: "docs"
+      slug: "twenty"
+      ref: 1e0b01d53cecb920550e92370f4f2b41f2eca997
