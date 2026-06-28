@@ -3,7 +3,7 @@
 // cinatra-ai/cinatra-engineering#62): tools/ui-design-system.flat.mjs is a
 // byte-identical vendored copy of
 // cinatra-ai/ci/config/ui-design-system.flat.mjs
-// @ ee01071f703412c4aa6e6b2fb16b089cb8bbeac0 (the same ci commit the thin
+// @ 83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf (the same ci commit the thin
 // caller workflow pins), spread here exactly per its caller contract
 // (TS/JSX-capable parser + spread the preset).
 //
