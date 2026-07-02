@@ -1,17 +1,19 @@
 // twenty-connector setup page implementation.
 //
-// Admin-only. Shadcn primitives ONLY per CLAUDE.md design discipline:
+// User-facing setup surface for the Twenty CRM connector. Admin-only. Shadcn
+// primitives ONLY per the connector's design discipline:
 //   - <Main> + <PageHeader> + <PageContent> shell
 //   - <Card> chrome with <CardHeader><CardTitle><CardDescription/></CardHeader><CardContent>
-//   - <FieldGroup><Field><FieldLabel><FieldDescription/></Field></FieldGroup> form primitives
-//   - <StatusPill> for connection state
-//   - <Button asChild> for deeplinks
-//   - semantic tokens only (text-foreground, bg-surface, border-line)
+//   - semantic tokens only (text-foreground, text-muted-foreground, bg-surface, border-line)
 //   - no emojis
 //
-// This scaffold ships the connector contract; the full setup flow (mint bearer
-// + insert external_mcp_servers row + populate allowed_catalog_tools) is not yet
-// wired.
+// Connecting a Twenty workspace from the product UI is not available yet: the
+// end-to-end connect flow depends on host-side wiring that is tracked as a
+// follow-up (a Twenty-scoped save action that persists the connection + its
+// encrypted API-key bearer, plus the tool allowlist the workspace is reachable
+// through). Until that lands, this page renders a plain, user-facing
+// "not connected" state — instead of internal scaffold/dev notes — so an
+// operator can read the connector's status at a glance.
 
 import { Main, PageHeader, PageContent } from "@cinatra-ai/sdk-ui/marketplace";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./components/ui/card";
@@ -20,23 +22,30 @@ export async function TwentyConnectorSetupImpl() {
   return (
     <Main className="min-h-screen">
       <PageHeader
-        title="Twenty CRM connector"
-        description="Configure cinatra's connection to a Twenty CRM instance (provider for the crm-connector facade)."
+        title="Twenty CRM"
+        description="Connect a Twenty CRM workspace so Cinatra agents can read and update its contacts, accounts, and lists."
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
-            <CardTitle>Configuration</CardTitle>
+            <div className="flex items-center justify-between gap-4">
+              <CardTitle>Connection</CardTitle>
+              <span className="inline-flex items-center rounded-full border border-line px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                Not available yet
+              </span>
+            </div>
             <CardDescription className="text-muted-foreground">
-              This scaffold ships the connector contract, the MCP primitives, and the
-              two-layer enforcement schema. The full setup flow (mint API-key bearer + insert
-              the external_mcp_servers row + populate the Layer B catalog allowlist) is not yet
-              wired, alongside the resolver and the encrypted bearer store.
+              Connecting a Twenty workspace from this screen is not available yet.
+              Once it is enabled, you will add your Twenty instance URL and an API
+              key here, and Cinatra will use them to reach your workspace on your
+              behalf.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <p className="text-foreground">
-              The full setup flow is not yet available — bootstrap manually via the docker stack (<code>docker compose --profile twenty up</code>).
+              In the meantime, a Twenty workspace can be connected by an
+              administrator during environment setup. The self-service connect
+              flow is being wired and will appear on this page once it is ready.
             </p>
           </CardContent>
         </Card>
