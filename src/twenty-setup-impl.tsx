@@ -7,13 +7,10 @@
 //   - semantic tokens only (text-foreground, text-muted-foreground, bg-surface, border-line)
 //   - no emojis
 //
-// Connecting a Twenty workspace from the product UI is not available yet: the
-// end-to-end connect flow depends on host-side wiring that is tracked as a
-// follow-up (a Twenty-scoped save action that persists the connection + its
-// encrypted API-key bearer, plus the tool allowlist the workspace is reachable
-// through). Until that lands, this page renders a plain, user-facing
-// "not connected" state — instead of internal scaffold/dev notes — so an
-// operator can read the connector's status at a glance.
+// Connecting a Twenty workspace from the product UI is not available yet;
+// the end-to-end connect flow is tracked as a follow-up (see issue #39).
+// Until that lands, this page renders a plain, user-facing "not connected"
+// state so an operator can read the connector's status at a glance.
 
 import { Main, PageHeader, PageContent } from "@cinatra-ai/sdk-ui/marketplace";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./components/ui/card";
