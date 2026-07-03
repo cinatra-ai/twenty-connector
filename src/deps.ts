@@ -7,22 +7,21 @@ import "server-only";
 // concrete implementations at boot; the provider package depends only on the
 // types declared here.
 //
-// This module defines the dependency type shape for the resolver,
-// encrypted-bearer store, and Twenty MCP forwarding — and (cinatra#172 Stage
-// H4) the host DI SINGLETON for the external-MCP registry read surface the
-// Twenty transport resolves its live workspace row through.
+// This module defines the host DI SINGLETON for the external-MCP registry
+// read surface the Twenty transport resolves its live workspace row through
+// (cinatra#172 Stage H4), plus the setup-page connect/disconnect actions +
+// viewer/connection-service surface the setup page renders against
+// (twenty-connector#39). The pasted API key never lives connector-side — the
+// host connect action holds it and stores it in Nango — so there is no
+// connector-side bearer store.
 
-export type TwentyConnectorDeps = {
-  /** Encrypted bearer storage. */
-  persistApiKey: (input: {
-    serverId: string;
-    apiKey: string;
-    workspaceId: string;
-    name: string;
-  }) => Promise<void>;
-  /** Decrypt a previously persisted bearer. */
-  loadApiKey: (serverId: string) => Promise<string | null>;
-};
+/** A host server action the setup page's connect/disconnect forms submit to.
+ *  Travels as DATA through the capability registry; the connector treats it as
+ *  an opaque FormData->Promise<void> server action. */
+export type TwentyConnectionAction = (formData: FormData) => Promise<void>;
+
+/** The resolved viewer the setup page reads to gate the admin-only surface. */
+export type TwentyViewerContext = { isAdmin: boolean; userId: string };
 
 // ---------------------------------------------------------------------------
 // hostInternal pinned-empty sweep (cinatra#172 Stage H4): `twenty-mcp-call.ts`
@@ -77,6 +76,22 @@ export interface TwentyConnectorHostDeps {
    * unconfigured, the row has no connection, or resolution fails — callers
    * treat null as "no auth header"). IN-PROCESS ONLY, per the TRUST note. */
   resolveBearer: (server: ExternalMcpServerRecordShape) => Promise<string | null>;
+  // --- setup-page connect surface (twenty-connector#39) --------------------
+  // The host server actions the setup page's connect/disconnect forms submit
+  // to. The host owns the admin authz + URL guard + live key probe + Nango
+  // import + row write inside these; the connector reimplements NO auth and
+  // never sees the key.
+  /** Connect/re-connect the instance-global Twenty workspace. */
+  saveTwentyConnectionAction: TwentyConnectionAction;
+  /** Disconnect: remove the row + the bound Nango connection. */
+  disconnectTwentyConnectionAction: TwentyConnectionAction;
+  /** Resolve the current viewer (admin flag + user id) so the setup page can
+   * gate its admin-only connect surface. */
+  resolveViewerContext: () => Promise<TwentyViewerContext>;
+  /** Is the host connection (Nango) service configured for API-key storage? */
+  isConnectionServiceReady: () => boolean;
+  /** Is the given URL private/non-public (surfaced as an advisory)? */
+  isPrivateUrl: (serverUrl: string) => boolean;
 }
 
 const TWENTY_DEPS_KEY = Symbol.for("@cinatra-ai/twenty-connector:host-deps/v1");

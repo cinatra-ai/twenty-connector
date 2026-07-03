@@ -4,6 +4,10 @@
 
 import { TwentyConnectorSetupImpl } from "./twenty-setup-impl";
 
-export default async function TwentyConnectorSetupPage() {
-  return <TwentyConnectorSetupImpl />;
+type SearchParams = Record<string, string | string[] | undefined>;
+
+export default async function TwentyConnectorSetupPage(props?: {
+  searchParams?: Promise<SearchParams>;
+}) {
+  return <TwentyConnectorSetupImpl searchParams={props?.searchParams} />;
 }

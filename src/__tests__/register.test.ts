@@ -51,21 +51,38 @@ beforeEach(() => {
 });
 
 describe("register(ctx) — provider + deps binding (cinatra#172 Stage H4)", () => {
-  it("keeps the crm-provider registration AND binds the deps slot at activation, resolving the host service LAZILY", async () => {
+  it("keeps the crm-provider registration AND binds the deps slot at activation, resolving READ members lazily + forwarding the real setup-page action refs", async () => {
     const getServerById = vi.fn((id: string) => (id === ROW.id ? ROW : null));
     const listServers = vi.fn(() => [ROW]);
     const resolveBearer = vi.fn(async () => "jwt-bearer");
-    const { registerProvider, resolveProviders } = activateWithServices({
-      "@cinatra-ai/host:external-mcp-registry": { getServerById, listServers, resolveBearer },
+    const saveTwentyConnectionAction = vi.fn(async () => {});
+    const disconnectTwentyConnectionAction = vi.fn(async () => {});
+    const resolveViewerContext = vi.fn(async () => ({ isAdmin: true, userId: "u1" }));
+    const isConnectionServiceReady = vi.fn(() => true);
+    const isPrivateUrl = vi.fn(() => false);
+    const { registerProvider } = activateWithServices({
+      "@cinatra-ai/host:external-mcp-registry": {
+        getServerById,
+        listServers,
+        resolveBearer,
+        saveTwentyConnectionAction,
+        disconnectTwentyConnectionAction,
+        resolveViewerContext,
+        isConnectionServiceReady,
+        isPrivateUrl,
+      },
     });
     // The CRM provider registration is unchanged by the H4 cutover.
     expect(registerProvider).toHaveBeenCalledWith(
       "crm-provider",
       expect.objectContaining({ packageName: "@cinatra-ai/twenty-connector" }),
     );
-    // No host-service resolution happened at registration (probe-safe), but
-    // the slot IS bound — twenty-mcp-call resolving it later succeeds.
-    expect(resolveProviders).not.toHaveBeenCalled();
+    // Probe-safe: constructing the deps slot invokes NO host READ member
+    // (registration does one eager service resolution to forward the real
+    // setup-page server-action references, but calls none of the members).
+    expect(getServerById).not.toHaveBeenCalled();
+    expect(listServers).not.toHaveBeenCalled();
+    expect(resolveViewerContext).not.toHaveBeenCalled();
 
     expect(getTwentyDeps().getServerById("twenty-workspace")).toEqual(ROW);
     expect(getTwentyDeps().getServerById("nope")).toBeNull();
@@ -73,6 +90,18 @@ describe("register(ctx) — provider + deps binding (cinatra#172 Stage H4)", () 
     // IN-PROCESS bearer mint (trusted-path posture — see the deps TRUST note).
     await expect(getTwentyDeps().resolveBearer(ROW)).resolves.toBe("jwt-bearer");
     expect(resolveBearer).toHaveBeenCalledWith(ROW);
+
+    // The setup-page connect/disconnect members are the host's REAL server-action
+    // references (forwarded directly so `<form action={…}>` gets a genuine
+    // server action), and the viewer/connection surface resolves lazily.
+    const fd = new FormData();
+    await getTwentyDeps().saveTwentyConnectionAction(fd);
+    expect(saveTwentyConnectionAction).toHaveBeenCalledWith(fd);
+    await getTwentyDeps().disconnectTwentyConnectionAction(fd);
+    expect(disconnectTwentyConnectionAction).toHaveBeenCalledWith(fd);
+    await expect(getTwentyDeps().resolveViewerContext()).resolves.toEqual({ isAdmin: true, userId: "u1" });
+    expect(getTwentyDeps().isConnectionServiceReady()).toBe(true);
+    expect(getTwentyDeps().isPrivateUrl("https://x")).toBe(false);
   });
 
   it("REPLACES a pre-bound deps slot (always-bind — a hot-update digest swap re-binds fresh resolvers)", () => {

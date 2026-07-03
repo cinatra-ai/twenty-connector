@@ -1,49 +1,187 @@
+import "server-only";
+
 // twenty-connector setup page implementation.
 //
-// User-facing setup surface for the Twenty CRM connector. Admin-only. Shadcn
-// primitives ONLY per the connector's design discipline:
-//   - <Main> + <PageHeader> + <PageContent> shell
-//   - <Card> chrome with <CardHeader><CardTitle><CardDescription/></CardHeader><CardContent>
-//   - semantic tokens only (text-foreground, text-muted-foreground, bg-surface, border-line)
-//   - no emojis
+// User-facing connect surface for the Twenty CRM connector. Connecting the
+// instance-global Twenty workspace is an ADMIN action: the pasted API key is
+// held ONLY by the host connect action (deps.saveTwentyConnectionAction), which
+// guards the URL, live-probes the key, imports it into the connection service
+// (Nango), and writes the external-MCP workspace row. The connector never sees
+// the key and reimplements no auth — it renders the form + the current state
+// against the host deps slot (`getTwentyDeps()`).
 //
-// Connecting a Twenty workspace from the product UI is not available yet;
-// the end-to-end connect flow is tracked as a follow-up (see issue #39).
-// Until that lands, this page renders a plain, user-facing "not connected"
-// state so an operator can read the connector's status at a glance.
+// Shadcn primitives ONLY per the connector's design discipline (vendored into
+// ./components/ui so the ui-design-system gate exempts the raw elements):
+//   - <Main> + <PageHeader> + <PageContent> shell
+//   - <Card> chrome, <Button> / <Badge> / <Input> / <Field*> primitives
+//   - semantic tokens only (text-foreground, bg-surface, border-line); no emojis
 
 import { Main, PageHeader, PageContent } from "@cinatra-ai/sdk-ui/marketplace";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "./components/ui/card";
+import { Button } from "./components/ui/button";
+import { Badge } from "./components/ui/badge";
+import { Input } from "./components/ui/input";
+import { FieldGroup, Field, FieldLabel, FieldDescription } from "./components/ui/field";
+import { getTwentyDeps } from "./deps";
+import { TWENTY_WORKSPACE_ROW_ID } from "./twenty-mcp-call";
 
-export async function TwentyConnectorSetupImpl() {
+type SearchParams = Record<string, string | string[] | undefined>;
+
+function pickParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export async function TwentyConnectorSetupImpl(props?: {
+  searchParams?: Promise<SearchParams>;
+}) {
+  const deps = getTwentyDeps();
+  const viewer = await deps.resolveViewerContext();
+  const row = deps.getServerById(TWENTY_WORKSPACE_ROW_ID);
+  const connected = Boolean(row?.enabled && row?.nangoConnectionId);
+  const instanceUrl = row ? row.serverUrl.replace(/\/mcp$/i, "") : null;
+  const connectionServiceReady = deps.isConnectionServiceReady();
+  const instanceIsPrivate = instanceUrl ? deps.isPrivateUrl(instanceUrl) : false;
+
+  const resolvedSearchParams = (await props?.searchParams) ?? {};
+  const saved = pickParam(resolvedSearchParams.saved);
+  const deleted = pickParam(resolvedSearchParams.deleted);
+  const errorMessage = pickParam(resolvedSearchParams.error);
+
   return (
     <Main className="min-h-screen">
       <PageHeader
         title="Twenty CRM"
-        description="Connect a Twenty CRM workspace so Cinatra agents can read and update its contacts, accounts, and lists."
+        description="Connect a Twenty CRM workspace so Cinatra agents can read its contacts, accounts, and lists."
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <div className="flex items-center justify-between gap-4">
               <CardTitle>Connection</CardTitle>
-              <span className="inline-flex items-center rounded-full border border-line px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
-                Not available yet
-              </span>
+              <Badge variant={connected ? "outline" : "secondary"} className="uppercase">
+                {connected ? "Connected" : "Not connected"}
+              </Badge>
             </div>
             <CardDescription className="text-muted-foreground">
-              Connecting a Twenty workspace from this screen is not available yet.
-              Once it is enabled, you will add your Twenty instance URL and an API
-              key here, and Cinatra will use them to reach your workspace on your
-              behalf.
+              Cinatra stores your Twenty API key securely in the connection
+              service and uses it to reach your workspace on your behalf. The key
+              is entered here once and is never shown again.
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <p className="text-foreground">
-              In the meantime, a Twenty workspace can be connected by an
-              administrator during environment setup. The self-service connect
-              flow is being wired and will appear on this page once it is ready.
-            </p>
+          <CardContent className="flex flex-col gap-6">
+            {saved ? (
+              <div className="rounded-control border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">
+                Twenty workspace connected.
+              </div>
+            ) : null}
+            {deleted ? (
+              <div className="rounded-control border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+                Twenty workspace disconnected.
+              </div>
+            ) : null}
+            {errorMessage ? (
+              <div className="rounded-control border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {errorMessage}
+              </div>
+            ) : null}
+
+            {!viewer.isAdmin ? (
+              <p className="rounded-panel border border-dashed border-line bg-surface-muted px-5 py-5 text-sm text-muted-foreground">
+                {connected
+                  ? `Connected to ${instanceUrl}. Only an administrator can change this connection.`
+                  : "A Twenty workspace has not been connected yet. Ask an administrator to connect one on this page."}
+              </p>
+            ) : (
+              <>
+                {connected ? (
+                  <section className="flex flex-col gap-3">
+                    <div className="rounded-panel border border-line bg-surface px-5 py-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <h3 className="text-base font-semibold text-foreground">
+                            Current workspace
+                          </h3>
+                          <p className="mt-1 truncate text-sm text-muted-foreground">
+                            {instanceUrl}
+                          </p>
+                          {instanceIsPrivate ? (
+                            <p className="mt-1 text-xs text-warning">
+                              This instance URL is private — reachable by Cinatra
+                              server-side, but not by external LLM providers.
+                            </p>
+                          ) : null}
+                        </div>
+                        <form action={deps.disconnectTwentyConnectionAction}>
+                          <Button type="submit" variant="destructive" size="sm">
+                            Disconnect
+                          </Button>
+                        </form>
+                      </div>
+                    </div>
+                  </section>
+                ) : null}
+
+                <section className="flex flex-col gap-4">
+                  <h3 className="text-lg font-semibold text-foreground">
+                    {connected ? "Update connection" : "Connect a workspace"}
+                  </h3>
+                  {!connectionServiceReady ? (
+                    <div className="rounded-control border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+                      The connection service is not configured yet, so the key
+                      cannot be stored. An administrator must run
+                      {" "}
+                      <code className="font-mono">cinatra setup nango</code> first.
+                    </div>
+                  ) : null}
+                  <form action={deps.saveTwentyConnectionAction} className="grid gap-4">
+                    <FieldGroup>
+                      <Field>
+                        <FieldLabel htmlFor="instanceUrl">Twenty instance URL</FieldLabel>
+                        <Input
+                          id="instanceUrl"
+                          name="instanceUrl"
+                          type="url"
+                          placeholder="https://crm.example.com"
+                          defaultValue={instanceUrl ?? ""}
+                          required
+                        />
+                        <FieldDescription>
+                          The base URL of your Twenty instance (Cinatra derives the
+                          REST and MCP endpoints from it).
+                        </FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="apiKey">Twenty API key</FieldLabel>
+                        <Input
+                          id="apiKey"
+                          name="apiKey"
+                          type="password"
+                          placeholder={connected ? "Enter a new key to replace the stored one" : "Paste your Twenty API key"}
+                          autoComplete="off"
+                          required
+                        />
+                        <FieldDescription>
+                          Generate an API key in Twenty under Settings → APIs &amp;
+                          Webhooks. Cinatra verifies the key against your instance
+                          before saving it.
+                        </FieldDescription>
+                      </Field>
+                    </FieldGroup>
+                    <div className="flex justify-end">
+                      <Button type="submit" disabled={!connectionServiceReady}>
+                        {connected ? "Update connection" : "Connect Twenty"}
+                      </Button>
+                    </div>
+                  </form>
+                </section>
+              </>
+            )}
           </CardContent>
         </Card>
       </PageContent>

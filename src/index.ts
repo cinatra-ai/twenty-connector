@@ -5,7 +5,6 @@ import { twentyConnector } from "./twenty-connector";
 
 export { twentyConnector } from "./twenty-connector";
 export { registerTwentyConnectorPrimitives } from "./mcp/module";
-export type { TwentyApiKeyConfig } from "./api-key-store";
 
 /**
  * Boot-time entry point. Registers the Twenty provider with the
