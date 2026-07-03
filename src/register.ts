@@ -30,12 +30,18 @@ import { registerTwentyConnector, type TwentyConnectorHostDeps } from "./deps";
 const PACKAGE_NAME = "@cinatra-ai/twenty-connector";
 
 // Local STRUCTURAL shape of the per-concern host service this connector
-// adapts into its deps slot (read + bearer-mint members only — the service's
-// pre-existing writers stay unbound here, least privilege).
+// adapts into its deps slot (the read + bearer-mint members, plus the
+// setup-page connect/disconnect actions + viewer/connection surface — the
+// service's generic create/delete writers stay unbound here, least privilege).
 type HostExternalMcpRegistryShape = {
   getServerById: TwentyConnectorHostDeps["getServerById"];
   listServers: TwentyConnectorHostDeps["listServers"];
   resolveBearer: TwentyConnectorHostDeps["resolveBearer"];
+  saveTwentyConnectionAction: TwentyConnectorHostDeps["saveTwentyConnectionAction"];
+  disconnectTwentyConnectionAction: TwentyConnectorHostDeps["disconnectTwentyConnectionAction"];
+  resolveViewerContext: TwentyConnectorHostDeps["resolveViewerContext"];
+  isConnectionServiceReady: TwentyConnectorHostDeps["isConnectionServiceReady"];
+  isPrivateUrl: TwentyConnectorHostDeps["isPrivateUrl"];
 };
 
 /** Lazy per-concern host-service resolution (fail-loud on a missing service —
@@ -51,18 +57,39 @@ function hostService<T>(ctx: ExtensionHostContext, capability: string): T {
   return provider.impl as T;
 }
 
-/** Build the host-bound deps from the per-concern host service. Every member
- * resolves LAZILY at call time — constructing this object does no I/O and no
- * resolution (probe-safe). */
+/** Build the host-bound deps from the per-concern host service. The read +
+ * guard members resolve the host service LAZILY at call time (probe-safe).
+ *
+ * The two setup-page WRITE members are the host's REAL server actions, bound
+ * DIRECTLY (not wrapped): the setup page passes them straight to `<form
+ * action={…}>`, which requires a genuine server-action reference — an adapter
+ * arrow closure is a fresh function, NOT a server action, and React rejects it
+ * at form render. So we resolve the host service ONCE here and forward its
+ * actual action references; if the service is not yet published we fall back to
+ * a lazy fail-loud wrapper (identical posture to the read members). `register`
+ * runs at ACTIVATION, after the host boot wiring publishes the service, so
+ * production always takes the direct-ref branch. Mirrors mcp-server-connector. */
 function buildHostBoundDeps(ctx: ExtensionHostContext): TwentyConnectorHostDeps {
   const registry = () =>
     hostService<HostExternalMcpRegistryShape>(ctx, "@cinatra-ai/host:external-mcp-registry");
+  const resolvedNow = ctx.capabilities.resolveProviders(
+    "@cinatra-ai/host:external-mcp-registry",
+  )[0]?.impl as HostExternalMcpRegistryShape | undefined;
   return {
     getServerById: (id) => registry().getServerById(id),
     listServers: () => registry().listServers(),
     // IN-PROCESS bearer mint — trusted-path posture documented in ./deps
     // (the minted bearer never crosses a wire boundary).
     resolveBearer: (server) => registry().resolveBearer(server),
+    saveTwentyConnectionAction:
+      resolvedNow?.saveTwentyConnectionAction ??
+      ((formData) => registry().saveTwentyConnectionAction(formData)),
+    disconnectTwentyConnectionAction:
+      resolvedNow?.disconnectTwentyConnectionAction ??
+      ((formData) => registry().disconnectTwentyConnectionAction(formData)),
+    resolveViewerContext: () => registry().resolveViewerContext(),
+    isConnectionServiceReady: () => registry().isConnectionServiceReady(),
+    isPrivateUrl: (serverUrl) => registry().isPrivateUrl(serverUrl),
   };
 }
 
