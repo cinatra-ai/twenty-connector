@@ -10,8 +10,11 @@ import "server-only";
 // the key and reimplements no auth — it renders the form + the current state
 // against the host deps slot (`getTwentyDeps()`).
 //
-// Shadcn primitives ONLY per the connector's design discipline (vendored into
-// ./components/ui so the ui-design-system gate exempts the raw elements):
+// Shadcn-style primitives ONLY per the connector's design discipline: the
+// registry-vendored card stays in ./components/ui; the connector-OWNED trimmed
+// form primitives (custom exports, dependency-light) live in ./ui so the host's
+// vendored-primitive provenance gate doesn't mistake them for registry copies
+// (both dirs are ui-design-system-gate carve-outs):
 //   - <Main> + <PageHeader> + <PageContent> shell
 //   - <Card> chrome, <Button> / <Badge> / <Input> / <Field*> primitives
 //   - semantic tokens only (text-foreground, bg-surface, border-line); no emojis
@@ -24,10 +27,10 @@ import {
   CardTitle,
   CardDescription,
 } from "./components/ui/card";
-import { Button } from "./components/ui/button";
-import { Badge } from "./components/ui/badge";
-import { Input } from "./components/ui/input";
-import { FieldGroup, Field, FieldLabel, FieldDescription } from "./components/ui/field";
+import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { Input } from "./ui/input";
+import { FieldGroup, Field, FieldLabel, FieldDescription } from "./ui/field";
 import { getTwentyDeps } from "./deps";
 import { TWENTY_WORKSPACE_ROW_ID } from "./twenty-mcp-call";
 

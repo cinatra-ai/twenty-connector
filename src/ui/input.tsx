@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { cn } from "../../lib/utils";
+import { cn } from "../lib/utils";
 
 // Self-contained shadcn-style Input primitive (vendored into components/ui so
 // the raw-<input> ban exempts it). Semantic tokens only.

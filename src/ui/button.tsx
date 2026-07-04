@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { cn } from "../../lib/utils";
+import { cn } from "../lib/utils";
 
 // Self-contained shadcn-style Button primitive (vendored into this extension's
 // components/ui so the ui-design-system gate's raw-<button> ban exempts it).
