@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { cn } from "../../lib/utils";
+import { cn } from "../lib/utils";
 
 // Self-contained shadcn-style Badge primitive (vendored into components/ui).
 // Dependency-light: no class-variance-authority / radix. Semantic tokens only.
