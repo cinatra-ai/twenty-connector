@@ -58,7 +58,6 @@ const CORE_ROOT = resolve(process.env.CINATRA_CORE_ROOT || process.cwd());
 const CORE_HELPERS = {
   seedContent: "scripts/fixtures/seed-twenty-content.mjs",
   devContentManifest: "scripts/fixtures/lib/dev-content-manifest.mjs",
-  twentyKeygen: "src/lib/twenty-keygen.mjs",
 };
 {
   const missing = ["docker-compose.yml", ...Object.values(CORE_HELPERS)].filter(
@@ -79,12 +78,15 @@ const { seedTwentyContent } = await coreImport(CORE_HELPERS.seedContent);
 const { loadDevContentManifest, validateDevContentManifest } = await coreImport(
   CORE_HELPERS.devContentManifest,
 );
+// The keygen helpers are CONNECTOR-LOCAL since the cinatra#976 devSetup
+// relocation (single source of truth lives in THIS repo at src/twenty-keygen.mjs;
+// the dev-setup hook and this proof share it).
 const {
   SEED_APPLE_WORKSPACE_ID,
   buildSeedDevArgs,
   buildGenerateApiKeyArgs,
   parseTwentyApiKey,
-} = await coreImport(CORE_HELPERS.twentyKeygen);
+} = await import(pathToFileURL(join(SCRIPT_DIR, "..", "..", "src", "twenty-keygen.mjs")).href);
 
 const SNAPSHOT_PATH = join(SCRIPT_DIR, "twenty-mcp-tools.json");
 const LOCAL_TOKEN_PATH = join(CORE_ROOT, "data", "twenty", "bootstrap.local.json");
