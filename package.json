@@ -6,16 +6,17 @@
   "packageManager": "pnpm@10.33.3",
   "files": [
     "src",
-    "!src/__tests__"
-  ,
-    "cinatra"],
+    "!src/__tests__",
+    "cinatra"
+  ],
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./register": "./src/register.ts",
     "./deps": "./src/deps.ts",
     "./mcp-module": "./src/mcp/module.ts",
-    "./setup-page": "./src/setup-page.tsx"
+    "./setup-page": "./src/setup-page.tsx",
+    "./src/dev-setup": "./src/dev-setup.ts"
   },
   "types": "./src/index.ts",
   "scripts": {
@@ -69,6 +70,7 @@
       }
     ],
     "serverEntry": "./register",
+    "devSetup": "./src/dev-setup",
     "requestedHostPorts": [
       "capabilities"
     ],
