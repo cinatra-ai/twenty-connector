@@ -145,7 +145,9 @@ export async function ensureTwentyBearerAttached(
       LOCAL_TWENTY.containerName,
       buildGenerateApiKeyArgs({ keyName: TWENTY_DEV_API_KEY_NAME }),
     );
-    const jwt = parseTwentyApiKey(minted.out);
+    // Only trust the mint output on a clean exit — a non-zero docker exec can
+    // still emit JWT-shaped noise on stdout that parseTwentyApiKey would accept.
+    const jwt = minted.code === 0 ? parseTwentyApiKey(minted.out) : null;
     if (!jwt) {
       return { nangoConnectionId: prior, working: false, minted: false, note: `mint-failed (exit ${minted.code})` };
     }
@@ -171,12 +173,15 @@ export async function ensureTwentyBearerAttached(
       return { nangoConnectionId: prior, working: false, minted: false, note: "nango-readback-mismatch" };
     }
     return { nangoConnectionId: connectionId, working: true, minted: true };
-  } catch (err) {
+  } catch {
+    // SECRET BOUNDARY: importNangoConnection / getNangoCredentials can throw an
+    // error whose message echoes the request payload (the minted JWT). Failure
+    // notes are FIXED labels — never interpolate the raw thrown message.
     return {
       nangoConnectionId: prior,
       working: false,
       minted: false,
-      note: `attach-failed: ${err instanceof Error ? err.message : String(err)}`,
+      note: "attach-failed",
     };
   }
 }
@@ -186,20 +191,28 @@ export async function ensureTwentyBearerAttached(
  * capability resolution).
  */
 export async function autoSetupLocalTwenty(deps: TwentyDevSetupDeps): Promise<ExtensionDevSetupStatus> {
-  if (!deps.helpers.probeDockerContainer(LOCAL_TWENTY.containerName)) {
-    return {
-      status: "skipped",
-      reason: `${LOCAL_TWENTY.containerName} not running (run docker compose --profile twenty up -d)`,
-    };
-  }
-  if (!deps.helpers.probeHttp(`${LOCAL_TWENTY.serverUrl}/healthz`)) {
-    return {
-      status: "skipped",
-      reason: `${LOCAL_TWENTY.serverUrl}/healthz not reachable yet (Twenty still booting)`,
-    };
-  }
+  // NEVER-THROW boundary: probeDockerContainer / probeHttp / getServerById are
+  // host helpers that may throw; a throw here must yield a soft-fail status, not
+  // reject the hook. Fixed reason label only (SECRET BOUNDARY — no raw error).
+  let existing: ReturnType<HostExternalMcpRegistryService["getServerById"]>;
+  try {
+    if (!deps.helpers.probeDockerContainer(LOCAL_TWENTY.containerName)) {
+      return {
+        status: "skipped",
+        reason: `${LOCAL_TWENTY.containerName} not running (run docker compose --profile twenty up -d)`,
+      };
+    }
+    if (!deps.helpers.probeHttp(`${LOCAL_TWENTY.serverUrl}/healthz`)) {
+      return {
+        status: "skipped",
+        reason: `${LOCAL_TWENTY.serverUrl}/healthz not reachable yet (Twenty still booting)`,
+      };
+    }
 
-  const existing = deps.registry.getServerById(LOCAL_TWENTY.rowId);
+    existing = deps.registry.getServerById(LOCAL_TWENTY.rowId);
+  } catch {
+    return { status: "error", reason: "dev-setup-probe-failed" };
+  }
 
   // Auto-mint + attach a working bearer (reuse-first, soft-fail).
   const bearer = await ensureTwentyBearerAttached(deps, existing);
@@ -222,10 +235,12 @@ export async function autoSetupLocalTwenty(deps: TwentyDevSetupDeps): Promise<Ex
       // every execute_tool.
       allowedCatalogTools: [...LOCAL_TWENTY.allowedCatalogTools],
     });
-  } catch (err) {
+  } catch {
+    // SECRET BOUNDARY: a fixed label only — a raw upsert error message could
+    // echo the row's bearer/connection payload into deps.log(...).
     return {
       status: "error",
-      reason: `upsertExternalMcpServer failed: ${err instanceof Error ? err.message : String(err)}`,
+      reason: "server-upsert-failed",
     };
   }
 
@@ -291,8 +306,18 @@ function isNangoSystemSurface(impl: unknown): impl is NangoSystemSurface {
 
 /** The `cinatra.devSetup` entry point the host's dev-only shell invokes. */
 export async function runDevSetup(ctx: ExtensionDevSetupContext): Promise<ExtensionDevSetupStatus> {
-  const registryImpl = resolveImpl(ctx, "@cinatra-ai/host:external-mcp-registry");
-  const nangoImpl = resolveImpl(ctx, "nango-system");
+  // NEVER-THROW: capability resolution (ctx.capabilities.resolveProviders via
+  // resolveImpl) runs outside autoSetupLocalTwenty's guards; a throwing host
+  // resolver must degrade to a soft-fail status, honoring the docstring's
+  // never-throws promise. Fixed reason label only (SECRET BOUNDARY).
+  let registryImpl: unknown;
+  let nangoImpl: unknown;
+  try {
+    registryImpl = resolveImpl(ctx, "@cinatra-ai/host:external-mcp-registry");
+    nangoImpl = resolveImpl(ctx, "nango-system");
+  } catch {
+    return { status: "skipped", reason: "host capability resolution failed" };
+  }
   if (!isRegistryService(registryImpl) || !isNangoSystemSurface(nangoImpl)) {
     return { status: "skipped", reason: "host services unresolved (external-mcp-registry / nango-system)" };
   }

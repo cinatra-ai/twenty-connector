@@ -146,6 +146,38 @@ describe("ensureTwentyBearerAttached", () => {
     expect(r.note).toMatch(/provider key unpublished/);
     expect(t.docker).not.toHaveBeenCalled();
   });
+
+  it("SECRET BOUNDARY: a throwing importNangoConnection whose message echoes the JWT → fixed 'attach-failed' note, never the raw message", async () => {
+    const t = makeDeps();
+    t.resolveBearer.mockResolvedValueOnce("stale-jwt");
+    stubProbeStatus(401);
+    t.docker
+      .mockReturnValueOnce({ code: 0, out: "" }) // seed
+      .mockReturnValueOnce({ code: 0, out: `key: ${JWT}\n` }); // mint
+    // Simulate the host helper rethrowing its request payload (the minted JWT)
+    // in the error message — the note must NOT carry it through.
+    t.importNangoConnection.mockRejectedValueOnce(new Error(`nango 400 on payload {"apiKey":"${JWT}"}`));
+
+    const r = await ensureTwentyBearerAttached(t.deps, EXISTING_ROW);
+
+    expect(r).toMatchObject({ working: false, minted: false, nangoConnectionId: "twenty-workspace" });
+    expect(r.note).toBe("attach-failed");
+    expect(r.note ?? "").not.toContain(JWT);
+  });
+
+  it("MINT exit-code: a non-zero docker exec with JWT-shaped stdout is NOT trusted", async () => {
+    const t = makeDeps();
+    // No prior row → first-attach mint path.
+    t.docker
+      .mockReturnValueOnce({ code: 0, out: "" }) // seed
+      .mockReturnValueOnce({ code: 1, out: `key: ${JWT}\n` }); // mint failed but emitted JWT-shaped noise
+
+    const r = await ensureTwentyBearerAttached(t.deps, null);
+
+    expect(r).toMatchObject({ working: false, minted: false });
+    expect(r.note).toMatch(/mint-failed \(exit 1\)/);
+    expect(t.importNangoConnection).not.toHaveBeenCalled();
+  });
 });
 
 describe("autoSetupLocalTwenty", () => {
@@ -182,5 +214,32 @@ describe("autoSetupLocalTwenty", () => {
     if (r.status !== "skipped") throw new Error("expected skipped");
     expect(r.reason).toMatch(/--profile twenty/);
     expect(t.upsertServer).not.toHaveBeenCalled();
+  });
+
+  it("NEVER-THROW: a throwing host probe helper yields a soft-fail status, not a rejection", async () => {
+    const t = makeDeps();
+    (t.deps.helpers.probeDockerContainer as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      throw new Error("docker daemon unreachable");
+    });
+
+    const r = await autoSetupLocalTwenty(t.deps);
+
+    expect(r.status).toBe("error");
+    if (r.status !== "error") throw new Error("expected error");
+    expect(r.reason).toBe("dev-setup-probe-failed");
+    expect(t.upsertServer).not.toHaveBeenCalled();
+  });
+
+  it("NEVER-THROW: a throwing getServerById yields a soft-fail status, not a rejection", async () => {
+    const t = makeDeps();
+    t.getServerById.mockImplementationOnce(() => {
+      throw new Error("registry read failed");
+    });
+
+    const r = await autoSetupLocalTwenty(t.deps);
+
+    expect(r.status).toBe("error");
+    if (r.status !== "error") throw new Error("expected error");
+    expect(r.reason).toBe("dev-setup-probe-failed");
   });
 });
