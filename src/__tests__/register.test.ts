@@ -51,7 +51,7 @@ beforeEach(() => {
 });
 
 describe("register(ctx) — provider + deps binding (cinatra#172 Stage H4)", () => {
-  it("keeps the crm-provider registration AND binds the deps slot at activation, resolving READ members lazily + forwarding the real setup-page action refs", async () => {
+  it("keeps the crm-provider registration AND binds the deps slot at activation, resolving EVERY member lazily at call time (cinatra#1097 — no activation-time capture)", async () => {
     const getServerById = vi.fn((id: string) => (id === ROW.id ? ROW : null));
     const listServers = vi.fn(() => [ROW]);
     const resolveBearer = vi.fn(async () => "jwt-bearer");
@@ -77,9 +77,10 @@ describe("register(ctx) — provider + deps binding (cinatra#172 Stage H4)", () 
       "crm-provider",
       expect.objectContaining({ packageName: "@cinatra-ai/twenty-connector" }),
     );
-    // Probe-safe: constructing the deps slot invokes NO host READ member
-    // (registration does one eager service resolution to forward the real
-    // setup-page server-action references, but calls none of the members).
+    // Probe-safe: constructing the deps slot invokes NO host member and
+    // captures NO published instance (cinatra#1097 — every member, including
+    // the connect/disconnect implementations, resolves the service lazily at
+    // call time, so a later host re-publication is always followed).
     expect(getServerById).not.toHaveBeenCalled();
     expect(listServers).not.toHaveBeenCalled();
     expect(resolveViewerContext).not.toHaveBeenCalled();
@@ -91,9 +92,9 @@ describe("register(ctx) — provider + deps binding (cinatra#172 Stage H4)", () 
     await expect(getTwentyDeps().resolveBearer(ROW)).resolves.toBe("jwt-bearer");
     expect(resolveBearer).toHaveBeenCalledWith(ROW);
 
-    // The setup-page connect/disconnect members are the host's REAL server-action
-    // references (forwarded directly so `<form action={…}>` gets a genuine
-    // server action), and the viewer/connection surface resolves lazily.
+    // The connect/disconnect members forward to the host implementation at
+    // INVOCATION time (the setup page's forms bind the connector-local
+    // "use server" actions in ./actions, which call these — cinatra#1097).
     const fd = new FormData();
     await getTwentyDeps().saveTwentyConnectionAction(fd);
     expect(saveTwentyConnectionAction).toHaveBeenCalledWith(fd);
