@@ -32,6 +32,13 @@ import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
 import { FieldGroup, Field, FieldLabel, FieldDescription } from "./ui/field";
 import { getTwentyDeps } from "./deps";
+// Connector-local "use server" actions (cinatra#1097): the forms bind these
+// compiler-minted references — never the deps-slot instances, which carry no
+// server-reference metadata of their own (see ./actions for the full story).
+import {
+  saveTwentyConnectionAction,
+  disconnectTwentyConnectionAction,
+} from "./actions";
 import { TWENTY_WORKSPACE_ROW_ID } from "./twenty-mcp-call";
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -120,7 +127,7 @@ export async function TwentyConnectorSetupImpl(props?: {
                             </p>
                           ) : null}
                         </div>
-                        <form action={deps.disconnectTwentyConnectionAction}>
+                        <form action={disconnectTwentyConnectionAction}>
                           <Button type="submit" variant="destructive" size="sm">
                             Disconnect
                           </Button>
@@ -142,7 +149,7 @@ export async function TwentyConnectorSetupImpl(props?: {
                       <code className="font-mono">cinatra setup nango</code> first.
                     </div>
                   ) : null}
-                  <form action={deps.saveTwentyConnectionAction} className="grid gap-4">
+                  <form action={saveTwentyConnectionAction} className="grid gap-4">
                     <FieldGroup>
                       <Field>
                         <FieldLabel htmlFor="instanceUrl">Twenty instance URL</FieldLabel>

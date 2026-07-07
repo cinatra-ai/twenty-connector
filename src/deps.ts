@@ -15,9 +15,11 @@ import "server-only";
 // host connect action holds it and stores it in Nango — so there is no
 // connector-side bearer store.
 
-/** A host server action the setup page's connect/disconnect forms submit to.
- *  Travels as DATA through the capability registry; the connector treats it as
- *  an opaque FormData->Promise<void> server action. */
+/** A host connect/disconnect implementation the connector-local `"use server"`
+ *  actions (./actions) forward to at POST time (cinatra#1097 — the forms bind
+ *  the connector-local actions, never these members directly). Travels as DATA
+ *  through the capability registry; the connector treats it as an opaque
+ *  FormData->Promise<void> function. */
 export type TwentyConnectionAction = (formData: FormData) => Promise<void>;
 
 /** The resolved viewer the setup page reads to gate the admin-only surface. */
@@ -76,11 +78,13 @@ export interface TwentyConnectorHostDeps {
    * unconfigured, the row has no connection, or resolution fails — callers
    * treat null as "no auth header"). IN-PROCESS ONLY, per the TRUST note. */
   resolveBearer: (server: ExternalMcpServerRecordShape) => Promise<string | null>;
-  // --- setup-page connect surface (twenty-connector#39) --------------------
-  // The host server actions the setup page's connect/disconnect forms submit
-  // to. The host owns the admin authz + URL guard + live key probe + Nango
-  // import + row write inside these; the connector reimplements NO auth and
-  // never sees the key.
+  // --- setup-page connect surface (twenty-connector#39, cinatra#1097) ------
+  // The host connect/disconnect implementations the connector-local
+  // "use server" actions (./actions) forward to at POST time — the setup
+  // page's forms bind the connector-local actions, never these members. The
+  // host owns the admin authz + URL guard + live key probe + Nango import +
+  // row write inside these; the connector reimplements NO auth and never
+  // sees the key.
   /** Connect/re-connect the instance-global Twenty workspace. */
   saveTwentyConnectionAction: TwentyConnectionAction;
   /** Disconnect: remove the row + the bound Nango connection. */
