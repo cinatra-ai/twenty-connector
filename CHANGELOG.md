@@ -3,6 +3,28 @@
 All notable changes to this project are documented here, derived from the
 project's merged pull request and release-tag history.
 
+## v0.1.5
+
+- fix(setup): bind connector-local "use server" actions and resolve host deps lazily, so the setup page renders instead of failing with a server error on hosts where the setup-action bridge is unavailable (cinatra#1097) (#52)
+- Note: supersedes 0.1.4, which was tagged before this fix and was not published to the marketplace catalog.
+
+## v0.1.4 — 2026-07-07
+
+- feat(dev-setup): dev-mode provisioning moves into a connector-owned `devSetup` hook conforming to the Cinatra extension devSetup contract — host IO through capability ports, soft-fail helpers that never leak raw error text (cinatra#976) (#49)
+- refactor(setup): move the connector-owned trimmed form primitives out of the registry-vendored namespace (#48)
+- No behavior change for installed instances. Not published to the marketplace catalog; superseded by 0.1.5.
+
+## v0.1.3 — 2026-07-04
+
+- feat(setup): wire the Twenty CRM connect flow — reported by @marcushorndt (#39); host-side action pairs in Cinatra
+- fix(setup): render a clean user-facing not-connected state (#39) (#41)
+- feat: final connection access-scoping declaration — default scope "workspace" (cinatra#954 W4) (#47)
+- chore: add cinatra.vendor metadata and drop a dead committed lockfile (#42)
+- chore(deps): declare cinatra.consumes for closure-gate enrollment (#43); declare cross-extension deps as semver ranges (#44)
+- docs: expand README to the org standard (#26) (#27); add Integrations hub docs + publish-on-tag + README link (#30); CHANGELOG reconstructed from tag + merged-PR history (#45)
+- chore: add CODEOWNERS coverage (#29); strip private tracker references from public source and workflow comments (#35, #38)
+- ci: ramp the ui-gate raw-JSX block to error (#31); adopt source-leak-gate (#32, #33); re-vendor the ui-gate preset with the dynamic-import ban (#34); pin the release workflow to the gated reusable extension-release flow (release-approval wall) (#40)
+
 ## v0.1.2 — 2026-06-23
 
 - ci: add truthful-attribution-gate in WARN (advisory) mode (#20)
@@ -36,20 +58,4 @@ project's merged pull request and release-tag history.
 
 - Initial release.
 
-## Unreleased
-
-- docs(readme): expand README to the org standard (#26) (#27)
-- chore: add CODEOWNERS coverage (#29)
-- docs: add Integrations hub docs + publish-on-tag + README link (#30)
-- ci(ui-gate): ramp raw-JSX block to error (#31)
-- ci: adopt source-leak-gate (#32)
-- ci: adopt source-leak-gate (#33)
-- ci(ui-gate): re-vendor preset with Block-C (dynamic-import ban) + bump pin to v0.1.1 (#34)
-- chore: strip private engineering-tracker refs from public source (#35)
-- chore: strip private tracker references from workflow comments (#38)
-- ci(release): pin reusable-extension-release to gated v0.1.1 (release-approval wall) (#40)
-- fix(twenty-connector): user-facing setup empty state (#39) (#41)
-- chore: add cinatra.vendor metadata and drop dead committed lockfile (#42)
-- chore(deps): declare cinatra.consumes for closure-gate enrollment (#43)
-- chore(deps): declare cross-extension deps as semver ranges (#44)
 
