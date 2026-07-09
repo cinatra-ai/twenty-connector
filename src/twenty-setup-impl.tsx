@@ -10,6 +10,16 @@ import "server-only";
 // the key and reimplements no auth — it renders the form + the current state
 // against the host deps slot (`getTwentyDeps()`).
 //
+// Transient connect/disconnect/error feedback (twenty-connector#51, epic
+// cinatra-ai/cinatra#1107 S9): the host actions redirect back here with
+// ?saved=1 / ?deleted=1 / ?error=<msg>. This used to render as three
+// conditional raw-div banners; that markup is retired outright in favor of
+// the canonical sdk-ui <SearchParamToast> island mounted below, driven by the
+// static code->message map in ./setup-flash. The persistent
+// "connection service is not configured" warning below is UNCHANGED — it is
+// ongoing state, not a transient outcome, and stays inline per the epic's
+// adjudication rules.
+//
 // Shadcn-style primitives ONLY per the connector's design discipline: the
 // registry-vendored card stays in ./components/ui; the connector-OWNED trimmed
 // form primitives (custom exports, dependency-light) live in ./ui so the host's
@@ -19,7 +29,10 @@ import "server-only";
 //   - <Card> chrome, <Button> / <Badge> / <Input> / <Field*> primitives
 //   - semantic tokens only (text-foreground, bg-surface, border-line); no emojis
 
+import { Suspense } from "react";
+
 import { Main, PageHeader, PageContent } from "@cinatra-ai/sdk-ui/marketplace";
+import { SearchParamToast } from "@cinatra-ai/sdk-ui/search-param-toast";
 import {
   Card,
   CardContent,
@@ -39,17 +52,15 @@ import {
   saveTwentyConnectionAction,
   disconnectTwentyConnectionAction,
 } from "./actions";
+import { TWENTY_SETUP_FLASH_TOASTS } from "./setup-flash";
 import { TWENTY_WORKSPACE_ROW_ID } from "./twenty-mcp-call";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
-function pickParam(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 export async function TwentyConnectorSetupImpl(props?: {
   searchParams?: Promise<SearchParams>;
 }) {
+  void props; // outcome params are read client-side by <SearchParamToast>, not here.
   const deps = getTwentyDeps();
   const viewer = await deps.resolveViewerContext();
   const row = deps.getServerById(TWENTY_WORKSPACE_ROW_ID);
@@ -58,13 +69,15 @@ export async function TwentyConnectorSetupImpl(props?: {
   const connectionServiceReady = deps.isConnectionServiceReady();
   const instanceIsPrivate = instanceUrl ? deps.isPrivateUrl(instanceUrl) : false;
 
-  const resolvedSearchParams = (await props?.searchParams) ?? {};
-  const saved = pickParam(resolvedSearchParams.saved);
-  const deleted = pickParam(resolvedSearchParams.deleted);
-  const errorMessage = pickParam(resolvedSearchParams.error);
-
   return (
     <Main className="min-h-screen">
+      {/* Codes-only flash island (replaces the retired saved/deleted/error
+          banner divs). The static code->message map lives in ./setup-flash;
+          a crafted ?error=<text> is never toasted verbatim — see that
+          module's header note. */}
+      <Suspense fallback={null}>
+        <SearchParamToast toasts={TWENTY_SETUP_FLASH_TOASTS} />
+      </Suspense>
       <PageHeader
         title="Twenty CRM"
         description="Connect a Twenty CRM workspace so Cinatra agents can read its contacts, accounts, and lists."
@@ -85,22 +98,6 @@ export async function TwentyConnectorSetupImpl(props?: {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-6">
-            {saved ? (
-              <div className="rounded-control border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">
-                Twenty workspace connected.
-              </div>
-            ) : null}
-            {deleted ? (
-              <div className="rounded-control border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
-                Twenty workspace disconnected.
-              </div>
-            ) : null}
-            {errorMessage ? (
-              <div className="rounded-control border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {errorMessage}
-              </div>
-            ) : null}
-
             {!viewer.isAdmin ? (
               <p className="rounded-panel border border-dashed border-line bg-surface-muted px-5 py-5 text-sm text-muted-foreground">
                 {connected
