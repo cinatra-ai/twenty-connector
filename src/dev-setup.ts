@@ -48,7 +48,21 @@ export const LOCAL_TWENTY = {
 const TWENTY_DEV_API_KEY_NAME = "cinatra-dev-auto";
 
 export type TwentyDevSetupDeps = {
-  registry: Pick<HostExternalMcpRegistryService, "getServerById" | "upsertServer" | "resolveBearer" | "nangoProviderConfigKey">;
+  registry: Pick<HostExternalMcpRegistryService, "getServerById" | "upsertServer" | "resolveBearer" | "nangoProviderConfigKey"> & {
+    /**
+     * DEV-ONLY sanctioned Twenty bearer attach (cinatra#1238). Self-declared
+     * OPTIONAL — the connector compiles against the PUBLISHED SDK, which does not
+     * yet carry this host-local member, so it is typeof-guarded at the call site
+     * (an older host without it degrades to a not-working hint). The host writer
+     * imports the minted key through `saveTwentyConnection` (which seeds the
+     * `externalMcp` connection identity + grant the bearer RESOLVER's use-gate
+     * requires) and verifies the gated resolver mints a bearer.
+     */
+    devAttachTwentyBearer?: (input: {
+      instanceUrl: string;
+      apiKey: string;
+    }) => Promise<{ resolved: boolean; connectionId: string | null }>;
+  };
   nango: Pick<NangoSystemSurface, "isNangoConfigured" | "ensureNangoIntegration" | "importNangoConnection" | "getNangoCredentials">;
   helpers: ExtensionDevSetupContext["helpers"];
   log: (message: string) => void;
@@ -131,12 +145,28 @@ export async function ensureTwentyBearerAttached(
     return { nangoConnectionId: prior, working: false, minted: false, note: "nango-not-configured" };
   }
 
-  // 3. Mint + attach. The registry's shared Nango provider key is published as
-  //    data on the capability (never hardcoded here) — a mismatch would leave
-  //    the row's bearer resolution blind to the imported connection.
+  // 3. Mint + attach through the SANCTIONED host path (cinatra#1238). Minting the
+  //    workspace key and importing the RAW Nango credential directly (the old
+  //    path) leaves the bearer RESOLVER failing closed: a raw
+  //    `getNangoCredentials` readback passes (a false positive) while
+  //    `resolveBearer` -> `gateExternalMcpConnectionUse` returns null because the
+  //    `externalMcp` connection-identity row + workspace grant were never seeded,
+  //    so agents 401. The dev-only host writer runs `saveTwentyConnection` (live
+  //    probe -> foreign-identity preflight -> Nango import + readback -> row
+  //    upsert -> identity + grant seed), bound to the seeded dev actor, and
+  //    VERIFIES the gated resolver actually mints a bearer — an honest `resolved`.
   const providerConfigKey = deps.registry.nangoProviderConfigKey;
   if (!providerConfigKey) {
     return { nangoConnectionId: prior, working: false, minted: false, note: "registry provider key unpublished (older host)" };
+  }
+  const attach = deps.registry.devAttachTwentyBearer;
+  if (typeof attach !== "function") {
+    return {
+      nangoConnectionId: prior,
+      working: false,
+      minted: false,
+      note: "host does not publish the twenty dev-attach writer (older host)",
+    };
   }
   try {
     // ensure the Apple workspace exists (idempotent)
@@ -151,32 +181,22 @@ export async function ensureTwentyBearerAttached(
     if (!jwt) {
       return { nangoConnectionId: prior, working: false, minted: false, note: `mint-failed (exit ${minted.code})` };
     }
-    const connectionId = prior ?? LOCAL_TWENTY.rowId;
-    await deps.nango.ensureNangoIntegration({
-      provider: "private-api-bearer",
-      providerConfigKey,
-      displayName: "Cinatra External MCP",
-    });
-    await deps.nango.importNangoConnection({
-      providerConfigKey,
-      connectionId,
-      credentials: { type: "API_KEY", apiKey: jwt },
-    });
-    const readback = await deps.nango.getNangoCredentials(providerConfigKey, connectionId, {
-      forceRefresh: true,
-    });
-    const readbackKey =
-      readback && typeof readback === "object" && "apiKey" in readback
-        ? (readback as { apiKey?: unknown }).apiKey
-        : null;
-    if (readbackKey !== jwt) {
-      return { nangoConnectionId: prior, working: false, minted: false, note: "nango-readback-mismatch" };
+    const attached = await attach({ instanceUrl: LOCAL_TWENTY.serverUrl, apiKey: jwt });
+    if (!attached.resolved || !attached.connectionId) {
+      // The sanctioned save ran but the gated resolver still did not mint a
+      // bearer (no dev actor/org, a live-probe reject, or an import failure).
+      // Never claim a working credential — surface the honest not-working state.
+      return {
+        nangoConnectionId: attached.connectionId ?? prior,
+        working: false,
+        minted: false,
+        note: "attach-unresolved",
+      };
     }
-    return { nangoConnectionId: connectionId, working: true, minted: true };
+    return { nangoConnectionId: attached.connectionId, working: true, minted: true };
   } catch {
-    // SECRET BOUNDARY: importNangoConnection / getNangoCredentials can throw an
-    // error whose message echoes the request payload (the minted JWT). Failure
-    // notes are FIXED labels — never interpolate the raw thrown message.
+    // SECRET BOUNDARY: a thrown error could echo the minted JWT. Failure notes
+    // are FIXED labels — never interpolate the raw thrown message.
     return {
       nangoConnectionId: prior,
       working: false,

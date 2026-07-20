@@ -20,6 +20,7 @@ type Fakes = {
   resolveBearer: ReturnType<typeof vi.fn>;
   importNangoConnection: ReturnType<typeof vi.fn>;
   getNangoCredentials: ReturnType<typeof vi.fn>;
+  devAttachTwentyBearer: ReturnType<typeof vi.fn>;
   upsertServer: ReturnType<typeof vi.fn>;
   getServerById: ReturnType<typeof vi.fn>;
 };
@@ -29,6 +30,8 @@ function makeDeps(): Fakes {
   const resolveBearer = vi.fn(async () => null);
   const importNangoConnection = vi.fn(async () => null);
   const getNangoCredentials = vi.fn(async () => null);
+  // Sanctioned host attach (cinatra#1238) — defaults to a resolved bearer.
+  const devAttachTwentyBearer = vi.fn(async () => ({ resolved: true, connectionId: "twenty-workspace" }));
   const upsertServer = vi.fn();
   const getServerById = vi.fn(() => null);
   const deps = {
@@ -37,6 +40,7 @@ function makeDeps(): Fakes {
       upsertServer,
       resolveBearer,
       nangoProviderConfigKey: "cinatra-external-mcp",
+      devAttachTwentyBearer,
     },
     nango: {
       isNangoConfigured: vi.fn(() => true),
@@ -55,7 +59,7 @@ function makeDeps(): Fakes {
     },
     log: vi.fn(),
   } as unknown as TwentyDevSetupDeps;
-  return { deps, docker, resolveBearer, importNangoConnection, getNangoCredentials, upsertServer, getServerById };
+  return { deps, docker, resolveBearer, importNangoConnection, getNangoCredentials, devAttachTwentyBearer, upsertServer, getServerById };
 }
 
 function stubProbeStatus(status: number) {
@@ -105,35 +109,54 @@ describe("ensureTwentyBearerAttached", () => {
     expect(t.docker).not.toHaveBeenCalled();
   });
 
-  it("ROTATE on a definite 401 — mints via docker exec, imports under the PUBLISHED provider key, readback-verifies", async () => {
+  it("FIRST WIRE (no prior): mints via docker exec then the SANCTIONED host attach seeds identity → a RESOLVED bearer in a single boot (cinatra#1238)", async () => {
+    const t = makeDeps();
+    t.docker
+      .mockReturnValueOnce({ code: 0, out: "" }) // seed
+      .mockReturnValueOnce({ code: 0, out: `key: ${JWT}\n` }); // mint
+    // The host writer runs saveTwentyConnection (identity + grant seed) and
+    // reports the gated resolver mints a bearer.
+    t.devAttachTwentyBearer.mockResolvedValueOnce({ resolved: true, connectionId: "twenty-workspace" });
+
+    const r = await ensureTwentyBearerAttached(t.deps, null);
+
+    expect(r).toMatchObject({ working: true, minted: true, nangoConnectionId: "twenty-workspace" });
+    // Attached with the minted key against the local Twenty instance URL.
+    expect(t.devAttachTwentyBearer).toHaveBeenCalledWith({
+      instanceUrl: LOCAL_TWENTY.serverUrl,
+      apiKey: JWT,
+    });
+    // The connector no longer imports the raw Nango credential itself.
+    expect(t.importNangoConnection).not.toHaveBeenCalled();
+  });
+
+  it("ROTATE on a definite 401 — mints and re-attaches through the sanctioned writer", async () => {
     const t = makeDeps();
     t.resolveBearer.mockResolvedValueOnce("stale-jwt");
     stubProbeStatus(401);
     t.docker
       .mockReturnValueOnce({ code: 0, out: "" }) // seed
       .mockReturnValueOnce({ code: 0, out: `key: ${JWT}\n` }); // mint
-    t.getNangoCredentials.mockResolvedValueOnce({ apiKey: JWT });
+    t.devAttachTwentyBearer.mockResolvedValueOnce({ resolved: true, connectionId: "twenty-workspace" });
 
     const r = await ensureTwentyBearerAttached(t.deps, EXISTING_ROW);
 
     expect(r).toMatchObject({ working: true, minted: true, nangoConnectionId: "twenty-workspace" });
-    expect(t.importNangoConnection).toHaveBeenCalledWith(
-      expect.objectContaining({ providerConfigKey: "cinatra-external-mcp", connectionId: "twenty-workspace" }),
-    );
+    expect(t.devAttachTwentyBearer).toHaveBeenCalledWith({ instanceUrl: LOCAL_TWENTY.serverUrl, apiKey: JWT });
   });
 
-  it("readback mismatch → not-working, prior connection kept", async () => {
+  it("ATTACH-UNRESOLVED: the sanctioned save ran but the gated resolver did not mint → honest not-working (no false positive)", async () => {
     const t = makeDeps();
     // no existing row → first attach path
     t.docker
       .mockReturnValueOnce({ code: 0, out: "" })
       .mockReturnValueOnce({ code: 0, out: JWT });
-    t.getNangoCredentials.mockResolvedValueOnce({ apiKey: "some-other-key" });
+    t.devAttachTwentyBearer.mockResolvedValueOnce({ resolved: false, connectionId: null });
 
     const r = await ensureTwentyBearerAttached(t.deps, null);
 
-    expect(r).toMatchObject({ working: false, minted: false, nangoConnectionId: null });
-    expect(r.note).toBe("nango-readback-mismatch");
+    expect(r).toMatchObject({ working: false, minted: false });
+    expect(r.note).toBe("attach-unresolved");
   });
 
   it("UNPUBLISHED registry provider key (older host) → soft not-working, no docker exec", async () => {
@@ -147,16 +170,27 @@ describe("ensureTwentyBearerAttached", () => {
     expect(t.docker).not.toHaveBeenCalled();
   });
 
-  it("SECRET BOUNDARY: a throwing importNangoConnection whose message echoes the JWT → fixed 'attach-failed' note, never the raw message", async () => {
+  it("OLDER HOST without the dev-attach writer → soft not-working, no docker exec", async () => {
+    const t = makeDeps();
+    (t.deps.registry as { devAttachTwentyBearer?: unknown }).devAttachTwentyBearer = undefined;
+
+    const r = await ensureTwentyBearerAttached(t.deps, null);
+
+    expect(r).toMatchObject({ working: false, minted: false });
+    expect(r.note).toMatch(/dev-attach writer \(older host\)/);
+    expect(t.docker).not.toHaveBeenCalled();
+  });
+
+  it("SECRET BOUNDARY: a throwing dev-attach writer whose message echoes the JWT → fixed 'attach-failed' note, never the raw message", async () => {
     const t = makeDeps();
     t.resolveBearer.mockResolvedValueOnce("stale-jwt");
     stubProbeStatus(401);
     t.docker
       .mockReturnValueOnce({ code: 0, out: "" }) // seed
       .mockReturnValueOnce({ code: 0, out: `key: ${JWT}\n` }); // mint
-    // Simulate the host helper rethrowing its request payload (the minted JWT)
+    // Simulate the host writer rethrowing its request payload (the minted JWT)
     // in the error message — the note must NOT carry it through.
-    t.importNangoConnection.mockRejectedValueOnce(new Error(`nango 400 on payload {"apiKey":"${JWT}"}`));
+    t.devAttachTwentyBearer.mockRejectedValueOnce(new Error(`nango 400 on payload {"apiKey":"${JWT}"}`));
 
     const r = await ensureTwentyBearerAttached(t.deps, EXISTING_ROW);
 
@@ -176,7 +210,7 @@ describe("ensureTwentyBearerAttached", () => {
 
     expect(r).toMatchObject({ working: false, minted: false });
     expect(r.note).toMatch(/mint-failed \(exit 1\)/);
-    expect(t.importNangoConnection).not.toHaveBeenCalled();
+    expect(t.devAttachTwentyBearer).not.toHaveBeenCalled();
   });
 });
 
@@ -187,7 +221,7 @@ describe("autoSetupLocalTwenty", () => {
     t.docker
       .mockReturnValueOnce({ code: 0, out: "" })
       .mockReturnValueOnce({ code: 0, out: JWT });
-    t.getNangoCredentials.mockResolvedValueOnce({ apiKey: JWT });
+    t.devAttachTwentyBearer.mockResolvedValueOnce({ resolved: true, connectionId: "twenty-workspace" });
 
     const r = await autoSetupLocalTwenty(t.deps);
 
