@@ -57,6 +57,7 @@
       "name": "Cinatra"
     },
     "displayName": "Twenty CRM",
+    "logo": "./cinatra/logo.svg",
     "dependencies": [
       {
         "packageName": "@cinatra-ai/crm-connector",
