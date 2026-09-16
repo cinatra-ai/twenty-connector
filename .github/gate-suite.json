@@ -1,0 +1,80 @@
+{
+  "$comment": "Named, versioned machine-verification suite for cinatra-ai/twenty-connector - the gate-arm half of the truthful verification-record model (the Truthful Attribution protocol section 4). The truthful-attribution-gate reads THIS file at the merged SHA (authoritative, no TOCTOU) when a merge record carries a Gate-suite arm: the cited suiteId@version must equal this file's, the Accountable trailer must equal accountable{github,name,email}, and every requiredContexts entry must have concluded success on the reviewed head. The four gate contexts below are exactly the contexts this repository's main ruleset (baseline-protection) requires, each carrying the reusable workflow it calls and the 40-character sha this repository's OWN caller pins for it; the truthful-attribution-gate context is listed BY NAME with its callerPath and allowedEvents and WITHOUT a workflow/pinned pair, because its engine pin lives in that caller's uses: line (itself a high-risk path) and the merge road reads the context by name. highRiskPaths EXTENDS the central cinatra-ai/ci defaults (config/high-risk-defaults.json, highRiskGlobs; the engine's classifyHighRisk fails closed unless the effective set is a superset); it is the UNION of the central defaults at BOTH engines that read it - the one this repository's attribution caller pins (8eede1022e835997d94974e4bd6205daf72131a2, 28 globs) and the one the merge road is written against (416a75707fdcfeb768b41c3a54f944078d1ab8fc, 35 globs, which adds the docs-publish-pipeline class) - so the effective set is a superset for either engine; this repository adds nothing of its own beyond that union, because the two additions it would need - \".github/**\" and \"**/gate-suite.json\" - are already central defaults, and the repository carries no release or publish script of its own (its only release path, .github/workflows/release.yml, is covered by \".github/**\", and scripts/twenty-bootstrap/ is CRM bootstrap/cutover operator tooling, not a release or publish road). High-risk changes (this file is itself one - see **/gate-suite.json in the defaults) require the HUMAN arm at tier=maintainer; the gate arm alone is rejected, so this file's birth carries a maintainer Reviewed-by, not a self-blessing gate arm. lastAuditedAt + auditEvidence are the section-4 monthly-audit record; the Accountable engineer re-audits monthly and bumps BOTH coupled in one commit (the gate warns >35d, fails the gate arm >65d; the human arm is always still available).",
+  "suiteId": "twenty-connector-core",
+  "version": "2026.09.1",
+  "accountable": {
+    "name": "Sandro Groganz",
+    "email": "sandro@cinatra.ai",
+    "github": "groganz"
+  },
+  "requiredContexts": [
+    {
+      "context": "actions-pinned-gate / actions-pinned-gate",
+      "workflow": "cinatra-ai/ci/.github/workflows/actions-pinned-gate.yml",
+      "pinned": "4c903fe9ca71ad47752a2bc92b72893e5f7c9814"
+    },
+    {
+      "context": "gitignore-gate / gitignore-gate",
+      "workflow": "cinatra-ai/ci/.github/workflows/gitignore-gate.yml",
+      "pinned": "4c903fe9ca71ad47752a2bc92b72893e5f7c9814"
+    },
+    {
+      "context": "source-leak-gate / source-leak-gate",
+      "workflow": "cinatra-ai/ci/.github/workflows/source-leak-gate.yml",
+      "pinned": "00ac7b92c2ca1ca291a1824d743cbd00c4a3e48e"
+    },
+    {
+      "context": "secret-scan-gate / secret-scan-gate",
+      "workflow": "cinatra-ai/ci/.github/workflows/secret-scan-gate.yml",
+      "pinned": "a8677e50ba02fcb11929e94c70fb5ba96a8ea3ae"
+    },
+    {
+      "context": "truthful-attribution-gate / truthful-attribution-gate",
+      "callerPath": ".github/workflows/truthful-attribution-gate.yml",
+      "allowedEvents": [
+        "pull_request",
+        "push",
+        "merge_group"
+      ]
+    }
+  ],
+  "highRiskPaths": [
+    "**/auth/**",
+    "**/permissions/**",
+    "**/session*",
+    "**/session/**",
+    "src/lib/auth*",
+    "src/lib/auth/**",
+    "**/webhooks/**/verify*",
+    "**/*signature*verif*",
+    "**/secrets/**",
+    "**/migrations/**",
+    "**/schema.prisma",
+    "**/schema.sql",
+    "**/*.migration.*",
+    ".github/**",
+    "**/CODEOWNERS",
+    "**/release*.sh",
+    "**/publish*.sh",
+    "scripts/release/**",
+    "scripts/publish/**",
+    "**/gate-suite.json",
+    "config/high-risk-defaults.json",
+    ".github/workflows/truthful-attribution-gate.yml",
+    "packages/sdk-extensions/**",
+    "**/extension-loader/**",
+    "**/trust-gate/**",
+    "**/signature-gate/**",
+    "**/capability-registry/**",
+    "**/transport-registry/**",
+    "docs-site/astro.config.mjs",
+    "docs-site/src/content.config.ts",
+    "docs-site/integrations-registry.json",
+    "**/integrations-registry.json",
+    "scripts/sync-docs.mjs",
+    "scripts/docs-contract-gate.mjs",
+    "scripts/lib/docs-contract-rules.mjs"
+  ],
+  "lastAuditedAt": "2026-09-16",
+  "auditEvidence": "2026-09-16 birth of this suite on the pull request that migrates this package onto the host-shared design primitives (cinatra#3509, part of cinatra#3471): the four requiredContexts entries were read from this repository's main ruleset baseline-protection and each pin read from this repository's own caller workflow at head daf4ddd5d4e35f6e5676283b4e17a089ea53fcb6 (actions-pinned-gate and gitignore-gate at 4c903fe9ca71ad47752a2bc92b72893e5f7c9814, source-leak-gate at 00ac7b92c2ca1ca291a1824d743cbd00c4a3e48e, secret-scan-gate at a8677e50ba02fcb11929e94c70fb5ba96a8ea3ae), the four contexts were re-read from the repository ruleset baseline-protection and the two central default sets re-read over REST on 2026-09-16; the attribution context was taken by name from its caller (.github/workflows/truthful-attribution-gate.yml, engine pin 8eede1022e835997d94974e4bd6205daf72131a2, WARN mode), and highRiskPaths is the union of the central cinatra-ai/ci defaults at both engines that read it (28 globs at 8eede1022e835997d94974e4bd6205daf72131a2 and 35 globs at 416a75707fdcfeb768b41c3a54f944078d1ab8fc, defaults version 2026.06 at both, the seven docs-publish-pipeline globs coming from the latter), with each listed context's green recorded by that pull request's own check run."
+}
