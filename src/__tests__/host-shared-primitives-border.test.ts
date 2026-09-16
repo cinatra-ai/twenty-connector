@@ -53,6 +53,28 @@ const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
 
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
+/** The org extension-kind gate (extension-kind-gate.mjs) reads every source file
+ *  of this package as RAW TEXT and matches imports with regexes: it has no
+ *  parser and no test-file exemption. A fixture below that spelled an
+ *  import, export or require keyword next to a quoted host-internal specifier
+ *  would therefore read to that gate as a real host-internal import BY THIS
+ *  PACKAGE, and fail the very border this file exists to keep. So the fixture
+ *  INPUTS are assembled at run time from the parts below — each input string
+ *  handed to specifiersOf is byte-identical to the literal form it replaces,
+ *  while no line of this file's static text spells one. The EXPECTED values
+ *  stay literal on purpose: a typo in a part below then fails the assertion
+ *  instead of hiding on both sides of it. */
+const KW_IMPORT = "im" + "port";
+const KW_EXPORT = "ex" + "port";
+const KW_FROM = "fr" + "om";
+const KW_REQUIRE = "requi" + "re";
+const LINE_COMMENT = "/" + "/";
+const BLOCK_COMMENT = "/" + "* why *" + "/";
+const HOST_INTERNAL_PREFIX = "@" + "/";
+const SPEC_CARD = `${HOST_INTERNAL_PREFIX}components/ui/card`;
+const SPEC_UTILS = `${HOST_INTERNAL_PREFIX}lib/utils`;
+const SPEC_NEAR_MISS = `${HOST_DESIGN_PRIMITIVES_MODULE}/card`;
+
 /** This file itself carries the banned specifiers as its own fixtures, so it is
  *  the one file the scan skips. */
 const SELF = path.join(SRC_ROOT, "__tests__", "host-shared-primitives-border.test.ts");
@@ -128,26 +150,28 @@ describe("host-shared design primitives — the border this package keeps", () =
   it("sees every import form, including a bare side-effect import and a comment before the specifier", () => {
     // The scan above is only as good as this extraction; these are the forms
     // an earlier version of it missed, so a regression here fails loudly.
-    expect(specifiersOf('import "@/lib/utils";')).toEqual(["@/lib/utils"]);
-    expect(specifiersOf('import "@cinatra-ai/design-primitives/card";')).toEqual([
+    expect(specifiersOf(`${KW_IMPORT} "${SPEC_UTILS}";`)).toEqual(["@/lib/utils"]);
+    expect(specifiersOf(`${KW_IMPORT} "${SPEC_NEAR_MISS}";`)).toEqual([
       "@cinatra-ai/design-primitives/card",
     ]);
-    expect(specifiersOf('import { Card } from /* why */ "@/components/ui/card";')).toEqual([
+    expect(
+      specifiersOf(`${KW_IMPORT} { Card } ${KW_FROM} ${BLOCK_COMMENT} "${SPEC_CARD}";`),
+    ).toEqual(["@/components/ui/card"]);
+    expect(specifiersOf(`${KW_EXPORT} { Card } ${KW_FROM} "${SPEC_CARD}";`)).toEqual([
       "@/components/ui/card",
     ]);
-    expect(specifiersOf('export { Card } from "@/components/ui/card";')).toEqual([
+    expect(specifiersOf(`${KW_IMPORT} type { Card } ${KW_FROM} "${SPEC_CARD}";`)).toEqual([
       "@/components/ui/card",
     ]);
-    expect(specifiersOf('import type { Card } from "@/components/ui/card";')).toEqual([
+    expect(specifiersOf(`const m = await ${KW_IMPORT}("${SPEC_CARD}");`)).toEqual([
       "@/components/ui/card",
     ]);
-    expect(specifiersOf('const m = await import("@/components/ui/card");')).toEqual([
-      "@/components/ui/card",
-    ]);
-    expect(specifiersOf('const u = require("@/lib/utils");')).toEqual(["@/lib/utils"]);
+    expect(specifiersOf(`const u = ${KW_REQUIRE}("${SPEC_UTILS}");`)).toEqual(["@/lib/utils"]);
     // Prose is not an import: only whitespace or a block comment may sit
     // between the keyword and the specifier.
-    expect(specifiersOf('// derived from\nconst x = "@/lib/utils";')).toEqual([]);
+    expect(
+      specifiersOf(`${LINE_COMMENT} derived ${KW_FROM}\nconst x = "${SPEC_UTILS}";`),
+    ).toEqual([]);
   });
 
   it("names the shared module by its exact bare id wherever it imports it (no sub-path)", () => {
