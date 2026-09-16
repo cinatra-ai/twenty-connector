@@ -96,16 +96,71 @@ const SOURCE_FILES = walk(SRC_ROOT)
   .filter((file) => SOURCE_EXTENSIONS.includes(path.extname(file)))
   .filter((file) => file !== SELF);
 
+/** The keyword that opens a specifier position. It carries NO quantifier at
+ *  all: everything after the keyword — the optional parenthesis, the whitespace
+ *  and any block comments before the quote — is read below with plain string
+ *  operations, so no part of this extraction can backtrack. The shape this
+ *  replaces (a repeated block-comment group wrapped around a lazy any-character
+ *  run) is the one CodeQL js/redos named for exponential backtracking on a
+ *  keyword followed by many star-slash-slash-star repetitions.
+ *
+ *  Cost, stated exactly: the scan makes the same kind of forward searches the
+ *  old expression made (one pass per keyword candidate for a comment
+ *  terminator and for the closing quote), so it is no dearer than what it
+ *  replaces; what is gone is the repeated group whose cost doubled with every
+ *  repetition added.
+ *
+ *  One deliberate narrowing, recorded by a case below: the old expression's
+ *  lazy comment body could run PAST a comment's terminator and swallow
+ *  non-comment text, so a keyword followed by a comment, ordinary text, a
+ *  second comment and a quoted specifier read as an import. The scan stops at
+ *  the first terminator and reads nothing there. That shape is not module
+ *  syntax; both extractions were run over every source file of this package
+ *  and returned the same specifiers for each. */
+const SPECIFIER_KEYWORD = /\b(?:from|import|require)/g;
+const OPEN_COMMENT = "/" + "*";
+const CLOSE_COMMENT = "*" + "/";
+const QUOTES = ['"', "'"];
+
+/** The first index at or after `start` that is not whitespace. */
+function skipSpace(source: string, start: number): number {
+  let index = start;
+  while (index < source.length && /\s/.test(source.charAt(index))) index += 1;
+  return index;
+}
+
+/** The first quote of either kind at or after `start`, or -1. */
+function nextQuote(source: string, start: number): number {
+  let found = -1;
+  for (const quote of QUOTES) {
+    const at = source.indexOf(quote, start);
+    if (at !== -1 && (found === -1 || at < found)) found = at;
+  }
+  return found;
+}
+
 /** Every module specifier a file names: static imports/re-exports, bare
  *  side-effect imports, dynamic import() and require(). */
 function specifiersOf(source: string): string[] {
   const specifiers: string[] = [];
   // `from "x"`, a bare side-effect `import "x"`, `import("x")` and `require("x")`,
-  // with a block comment tolerated between the keyword and the specifier.
-  const re =
-    /(?:\bfrom|\bimport|\brequire)\s*\(?\s*(?:\/\*[\s\S]*?\*\/\s*)*["']([^"']+)["']/g;
+  // with block comments tolerated between the keyword and the specifier.
+  SPECIFIER_KEYWORD.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(source)) !== null) specifiers.push(match[1]);
+  while ((match = SPECIFIER_KEYWORD.exec(source)) !== null) {
+    let index = skipSpace(source, match.index + match[0].length);
+    if (source.charAt(index) === "(") index = skipSpace(source, index + 1);
+    while (source.startsWith(OPEN_COMMENT, index)) {
+      const end = source.indexOf(CLOSE_COMMENT, index + OPEN_COMMENT.length);
+      if (end === -1) break;
+      index = skipSpace(source, end + CLOSE_COMMENT.length);
+    }
+    if (!QUOTES.includes(source.charAt(index))) continue;
+    const close = nextQuote(source, index + 1);
+    if (close === -1 || close === index + 1) continue;
+    specifiers.push(source.slice(index + 1, close));
+    SPECIFIER_KEYWORD.lastIndex = close + 1;
+  }
   return specifiers;
 }
 
@@ -172,6 +227,31 @@ describe("host-shared design primitives — the border this package keeps", () =
     expect(
       specifiersOf(`${LINE_COMMENT} derived ${KW_FROM}\nconst x = "${SPEC_UTILS}";`),
     ).toEqual([]);
+  });
+
+  it("reads a comment-laden fixture at once (it cannot backtrack exponentially)", () => {
+    // The extraction above used to tolerate comments with a repeated group; on a
+    // keyword followed by many star-slash-slash-star repetitions and no
+    // specifier to find, that group backtracked exponentially — the finding
+    // CodeQL js/redos raised against the expression this scan replaces. The
+    // scan makes one forward pass per keyword, so this returns nothing at once
+    // rather than costing twice as much with every repetition added.
+    const pathological = `${KW_FROM} ${OPEN_COMMENT}${"*//*".repeat(28)}X`;
+    const started = Date.now();
+    expect(specifiersOf(pathological)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("stops at a comment's terminator (the one narrowing against the old scan)", () => {
+    // The expression this scan replaces could swallow ordinary text between two
+    // comments and still read the quoted specifier after them. That shape is
+    // not module syntax, no source file carries it, and the scan does not read
+    // it as an import. Recorded so the narrowing is deliberate, not drift.
+    expect(
+      specifiersOf(`${KW_FROM} ${BLOCK_COMMENT} plain ${BLOCK_COMMENT} "x";`),
+    ).toEqual([]);
+    // What the old scan and this one both read: comments only, then the quote.
+    expect(specifiersOf(`${KW_FROM} ${BLOCK_COMMENT} ${BLOCK_COMMENT} "x";`)).toEqual(["x"]);
   });
 
   it("names the shared module by its exact bare id wherever it imports it (no sub-path)", () => {
