@@ -3,6 +3,13 @@
 All notable changes to this project are documented here, derived from the
 project's merged pull request and release-tag history.
 
+## v0.1.7 — 2026-09-16
+
+- refactor(ui): drop the vendored `card` primitive copy. Self-rendering extensions take the product's design primitives from the host through the shared module `@cinatra-ai/design-primitives` (the id is virtual: nothing is published under it and no package declares a dependency or a peer on it; this package's setup and settings pages are compiled by the host, so the host's own path map resolves the id at build time), so this package carries no byte copy of a product element (cinatra#3509, part of cinatra#3471)
+- test: a standing border assertion for that boundary — nothing under `src/components/ui/`, no product-internal import (`@/components/ui/*`, `@/lib/utils`), no dependency on the virtual module id, and the shared module named by its exact bare id wherever it is imported
+- ci: commit this repository's named check suite, `.github/gate-suite.json` (`twenty-connector-core@2026.09.1`), so the merge road can read the gate arm
+- No behavior change for installed instances: the connector's own trimmed primitives under `src/ui/` are untouched and nothing in this package imported the vendored card.
+
 ## v0.1.5
 
 - fix(setup): bind connector-local "use server" actions and resolve host deps lazily, so the setup page renders instead of failing with a server error on hosts where the setup-action bridge is unavailable (cinatra#1097) (#52)
