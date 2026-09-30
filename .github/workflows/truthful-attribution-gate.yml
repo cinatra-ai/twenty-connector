@@ -6,9 +6,9 @@ name: truthful-attribution-gate
 # Double-pinned: the `uses:` ref and the `ref` input below name the SAME
 # cinatra-ai/ci commit (1e40675e), and .github/gate-suite.json names that commit
 # as the `pinned` engine of this context's requiredContexts row - move all three
-# in one commit. That commit carries no release tag (it follows v0.1.4), so the
-# version comment `# v0.1.4-next.1e40675` names its short sha as a semver
-# pre-release marker rather than claiming a tag.
+# in one commit. That commit carries no tag. The actions pin gate requires a
+# comment of the form `# v<number>` on the uses: line, so that comment is a bare
+# `v0` with the engine's short sha as build metadata; it claims no tag.
 
 on:
   pull_request:
@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   truthful-attribution-gate:                 # caller job id MUST stay this exact string
-    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@1e40675e1642dcc32d195f27b3deb285b4d3d6fc # v0.1.4-next.1e40675
+    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@1e40675e1642dcc32d195f27b3deb285b4d3d6fc # v0+engine.1e40675e.grant.2
     with:
       mode: warn
-      ref: 1e40675e1642dcc32d195f27b3deb285b4d3d6fc # same SHA as the workflow @ref
+      ref: 1e40675e1642dcc32d195f27b3deb285b4d3d6fc # engine 1e40675e, grant revision 2 (the pin the application's suite carries)
