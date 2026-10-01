@@ -39,12 +39,7 @@ import "server-only";
 // primitive is imported straight from `@cinatra-ai/sdk-ui/tabs` (same
 // no-copy contract every bundled-react connector setup page follows).
 //
-// Shadcn-style primitives ONLY per the connector's design discipline: the
-// connector-OWNED trimmed form primitives (custom exports, dependency-light)
-// live in ./ui so the host's vendored-primitive provenance gate doesn't
-// mistake them for registry copies:
-//   - <Button> / <Input> / <Field*> primitives
-//   - semantic tokens only (text-foreground, bg-surface, border-line); no emojis
+// Shared form primitives come from the host design module.
 
 import { Suspense } from "react";
 
@@ -53,9 +48,7 @@ import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-column
 import { ConnectionStatusBadge } from "@cinatra-ai/sdk-ui/connection-status-badge";
 import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@cinatra-ai/sdk-ui/tabs";
 import { SearchParamToast } from "@cinatra-ai/sdk-ui/search-param-toast";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { FieldGroup, Field, FieldLabel, FieldDescription } from "./ui/field";
+import { Button, Input, FieldGroup, Field, FieldLabel, FieldDescription } from "@cinatra-ai/design-primitives";
 import { getTwentyDeps } from "./deps";
 // Connector-local "use server" actions (cinatra#1097): the forms bind these
 // compiler-minted references — never the deps-slot instances, which carry no
