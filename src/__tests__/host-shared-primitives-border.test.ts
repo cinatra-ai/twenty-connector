@@ -29,9 +29,7 @@
 //      near-miss sub-path such as `@cinatra-ai/design-primitives/card`
 //      resolves nowhere.
 //
-// The package's own components under `src/ui/` (badge, button, field, input) are
-// NOT in scope: they are the connector's OWN trimmed primitives, not registry
-// byte copies, and the border floor does not record them.
+// The remaining form primitives under src/ui are covered below too.
 //
 // Source-text assertions rather than a mounted render: this repo is an extension
 // SOURCE MIRROR: react and react-dom are declared peers that a standalone
@@ -262,5 +260,22 @@ describe("host-shared design primitives — the border this package keeps", () =
           specifier !== HOST_DESIGN_PRIMITIVES_MODULE),
     ).map(({ file, specifier }) => `${file}: ${specifier}`);
     expect(nearMisses).toEqual([]);
+  });
+});
+
+
+describe("remaining shared form primitives", () => {
+  it("carries no primitive copy under src/ui either", () => {
+    expect(existsSync(path.join(SRC_ROOT, "ui"))).toBe(false);
+  });
+
+  it("takes every setup form primitive from the host module", () => {
+    const source = readFileSync(path.join(SRC_ROOT, "twenty-setup-impl.tsx"), "utf8");
+    const hostImport = source.match(/import\s*\{([^}]+)\}\s*from\s*["']@cinatra-ai\/design-primitives["']/)?.[1] ?? "";
+    const names = hostImport.split(",").map((name) => name.trim());
+    for (const name of ["Button", "Input", "FieldGroup", "Field", "FieldLabel", "FieldDescription"]) {
+      expect(names).toContain(name);
+    }
+    expect(specifiersOf(source).filter((specifier) => specifier.startsWith("./ui/"))).toEqual([]);
   });
 });
