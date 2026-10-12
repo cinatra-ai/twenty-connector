@@ -9,6 +9,15 @@
 // Idempotent. Soft-fails (returns a status object) — never throws. SECRET
 // BOUNDARY: the minted JWT is never logged; failure notes are fixed labels.
 //
+// HOST-HANDED KEY (cinatra#4098): a preview container carries no docker and no
+// curl, so the docker probe fails and the docker mint cannot run. The install
+// then mints the workspace key on the machine and hands it to the container in
+// the env var this package declares in its manifest `cinatra.envOverrides`
+// (`secrets:devApiKey`). The hook never reads the process environment itself:
+// it reads the key through the host's env-override reader on the
+// `@cinatra-ai/host:connector-config` capability. The handed key is used ONLY
+// when the docker probe fails, and ONLY where the docker road would mint.
+//
 // SDK imports are TYPE-ONLY (host-peer value-import ban); the host services
 // resolve at call time through the capability port on the hook context.
 
@@ -25,6 +34,12 @@ import {
   parseTwentyApiKey,
   probeTwentyBearer,
 } from "./twenty-keygen.mjs";
+
+/** This package's name — the key the host's env-override reader is asked for. */
+export const TWENTY_PACKAGE_NAME = "@cinatra-ai/twenty-connector";
+
+/** The settings/secrets key the manifest maps the host-handed env var onto. */
+export const HANDED_API_KEY_SECRET = "devApiKey";
 
 export const LOCAL_TWENTY = {
   containerName: "cinatra-twenty-1",
@@ -66,6 +81,12 @@ export type TwentyDevSetupDeps = {
   nango: Pick<NangoSystemSurface, "isNangoConfigured" | "ensureNangoIntegration" | "importNangoConnection" | "getNangoCredentials">;
   helpers: ExtensionDevSetupContext["helpers"];
   log: (message: string) => void;
+  /**
+   * A workspace API key the install minted on the machine and handed to this
+   * instance (cinatra#4098). Used only when the docker probe fails. SECRET: it
+   * is never logged and never placed in a status, a reason, a detail or a note.
+   */
+  handedApiKey?: string | null;
 };
 
 export type TwentyBearerOutcome = {
@@ -75,6 +96,8 @@ export type TwentyBearerOutcome = {
   // means the connector will 401 — the caller surfaces a hint.
   working: boolean;
   minted: boolean;
+  /** True when the host-handed key (not a docker mint) was attached. */
+  handed?: boolean;
   note?: string;
 };
 
@@ -89,14 +112,18 @@ export type TwentyBearerOutcome = {
  *      resolve — leave the row as-is and report not-working (caller hints).
  *   3. Otherwise mint a fresh workspace API key via docker exec (seeding the
  *      Apple workspace first, both idempotent), import it into Nango under the
- *      registry's shared provider key, and readback-verify.
+ *      registry's shared provider key, and readback-verify. With a host-handed
+ *      key (`opts.handedApiKey`, passed only when docker is unavailable) the
+ *      docker mint is skipped and the handed key is attached on the same road.
  * Soft-fails: any failure returns the prior connection id + a note, never throws.
  */
 export async function ensureTwentyBearerAttached(
   deps: TwentyDevSetupDeps,
   existing: ReturnType<HostExternalMcpRegistryService["getServerById"]>,
+  opts: { handedApiKey?: string | null } = {},
 ): Promise<TwentyBearerOutcome> {
   const prior = existing?.nangoConnectionId ?? null;
+  const handed = handedKeyOf(opts.handedApiKey);
 
   // 1. Reuse — and crucially, NEVER mint a duplicate on a transient failure.
   //    Once a connection already exists, the ONLY trigger to mint a fresh key
@@ -168,6 +195,25 @@ export async function ensureTwentyBearerAttached(
       note: "host does not publish the twenty dev-attach writer (older host)",
     };
   }
+  if (handed) {
+    // The install minted this key on the machine (docker is unavailable here):
+    // attach it on the SAME sanctioned road the docker mint uses.
+    try {
+      const attached = await attach({ instanceUrl: LOCAL_TWENTY.serverUrl, apiKey: handed });
+      if (!attached.resolved || !attached.connectionId) {
+        return {
+          nangoConnectionId: attached.connectionId ?? prior,
+          working: false,
+          minted: false,
+          note: "attach-unresolved",
+        };
+      }
+      return { nangoConnectionId: attached.connectionId, working: true, minted: false, handed: true };
+    } catch {
+      // SECRET BOUNDARY: a fixed label — a thrown message could echo the key.
+      return { nangoConnectionId: prior, working: false, minted: false, note: "attach-failed" };
+    }
+  }
   try {
     // ensure the Apple workspace exists (idempotent)
     deps.helpers.dockerExecCapture(LOCAL_TWENTY.containerName, buildSeedDevArgs());
@@ -206,6 +252,11 @@ export async function ensureTwentyBearerAttached(
   }
 }
 
+/** A non-blank handed key, trimmed; null for anything else. */
+function handedKeyOf(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 /**
  * The Twenty auto-setup body (exported for tests; `runDevSetup` wraps it with
  * capability resolution).
@@ -215,14 +266,22 @@ export async function autoSetupLocalTwenty(deps: TwentyDevSetupDeps): Promise<Ex
   // host helpers that may throw; a throw here must yield a soft-fail status, not
   // reject the hook. Fixed reason label only (SECRET BOUNDARY — no raw error).
   let existing: ReturnType<HostExternalMcpRegistryService["getServerById"]>;
+  // The host-handed key applies ONLY when the docker probe fails (no docker in
+  // the instance). With docker present the docker road runs unchanged and the
+  // handed key is ignored.
+  let handedApiKey: string | null = null;
   try {
     if (!deps.helpers.probeDockerContainer(LOCAL_TWENTY.containerName)) {
-      return {
-        status: "skipped",
-        reason: `${LOCAL_TWENTY.containerName} not running (run docker compose --profile twenty up -d)`,
-      };
-    }
-    if (!deps.helpers.probeHttp(`${LOCAL_TWENTY.serverUrl}/healthz`)) {
+      handedApiKey = handedKeyOf(deps.handedApiKey);
+      if (!handedApiKey) {
+        return {
+          status: "skipped",
+          reason: `${LOCAL_TWENTY.containerName} not running (run docker compose --profile twenty up -d)`,
+        };
+      }
+      // No docker and no curl here: the docker and curl probes are skipped; the
+      // bearer probe and the host's attach road read Twenty themselves.
+    } else if (!deps.helpers.probeHttp(`${LOCAL_TWENTY.serverUrl}/healthz`)) {
       return {
         status: "skipped",
         reason: `${LOCAL_TWENTY.serverUrl}/healthz not reachable yet (Twenty still booting)`,
@@ -235,7 +294,7 @@ export async function autoSetupLocalTwenty(deps: TwentyDevSetupDeps): Promise<Ex
   }
 
   // Auto-mint + attach a working bearer (reuse-first, soft-fail).
-  const bearer = await ensureTwentyBearerAttached(deps, existing);
+  const bearer = await ensureTwentyBearerAttached(deps, existing, { handedApiKey });
 
   try {
     deps.registry.upsertServer({
@@ -279,7 +338,9 @@ export async function autoSetupLocalTwenty(deps: TwentyDevSetupDeps): Promise<Ex
 
   const bearerNote = bearer.minted
     ? "bearer auto-minted + attached"
-    : bearer.working
+    : bearer.handed
+      ? "host-handed bearer attached"
+      : bearer.working
       ? "bearer present"
       : `no working bearer (${bearer.note ?? "unknown"})`;
 
@@ -310,6 +371,31 @@ function isRegistryService(impl: unknown): impl is HostExternalMcpRegistryServic
     typeof c.upsertServer === "function" &&
     typeof c.resolveBearer === "function"
   );
+}
+
+/** The host `connector-config` capability's additive env-override reader
+ * (cinatra#982): returns this package's currently-set manifest env overrides,
+ * keyed by their settings/secrets key. Narrowed structurally; an older host
+ * without it yields no handed key. */
+type ConnectorConfigEnvReader = { resolveEnvOverrides: (packageName: string) => unknown };
+
+function isConnectorConfigEnvReader(impl: unknown): impl is ConnectorConfigEnvReader {
+  const c = impl as Partial<ConnectorConfigEnvReader> | null;
+  return !!c && typeof c === "object" && typeof c.resolveEnvOverrides === "function";
+}
+
+/** The host-handed key read through the host's env reader, or null (absent,
+ * blank, an older host, or a throwing reader). Never logged. */
+function readHandedApiKey(ctx: ExtensionDevSetupContext): string | null {
+  try {
+    const reader = resolveImpl(ctx, "@cinatra-ai/host:connector-config");
+    if (!isConnectorConfigEnvReader(reader)) return null;
+    const overrides = reader.resolveEnvOverrides(TWENTY_PACKAGE_NAME);
+    if (!overrides || typeof overrides !== "object") return null;
+    return handedKeyOf((overrides as Record<string, unknown>)[HANDED_API_KEY_SECRET]);
+  } catch {
+    return null;
+  }
 }
 
 function isNangoSystemSurface(impl: unknown): impl is NangoSystemSurface {
@@ -346,5 +432,6 @@ export async function runDevSetup(ctx: ExtensionDevSetupContext): Promise<Extens
     nango: nangoImpl,
     helpers: ctx.helpers,
     log: ctx.log,
+    handedApiKey: readHandedApiKey(ctx),
   });
 }

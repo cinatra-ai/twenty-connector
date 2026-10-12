@@ -76,6 +76,9 @@
       "capabilities"
     ],
     "sdkAbiRange": "^2",
+    "envOverrides": {
+      "CINATRA_EXT_CINATRA_HAI_STWENTY_HCONNECTOR__DEV_API_KEY": "secrets:devApiKey"
+    },
     "consumes": []
   }
 }
