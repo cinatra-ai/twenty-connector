@@ -94,7 +94,7 @@ export async function previewHostHandover({ log = () => {}, docker = defaultDock
     try {
       log(`  Twenty CRM: ${line}`);
     } catch {
-      // a failing log sink never fails the handover
+      // a throwing log sink never fails the handover: a logging fault must not drop a correctly minted key
     }
   };
   try {
@@ -110,7 +110,7 @@ export async function previewHostHandover({ log = () => {}, docker = defaultDock
     const network = networks[0];
     const seed = docker(["exec", TWENTY_SERVER_CONTAINER, ...buildSeedDevArgs()], { timeoutMs: EXEC_TIMEOUT_MS });
     if (seed.status !== 0) {
-      say(`the workspace seed exited ${seed.status}; no key and no forward are handed to the preview.`);
+      say("the workspace seed failed; no key and no forward are handed to the preview.");
       return {};
     }
     const minted = docker(
@@ -120,12 +120,12 @@ export async function previewHostHandover({ log = () => {}, docker = defaultDock
     // Only a clean exit is trusted: a failed exec can still print JWT-shaped noise.
     const key = minted.status === 0 ? parseTwentyApiKey(minted.stdout) : null;
     if (!key) {
-      say(`could not mint a workspace key (exit ${minted.status}); no key and no forward are handed to the preview.`);
+      say("could not mint a workspace key; no key and no forward are handed to the preview.");
       return {};
     }
     say(
       `hands the preview a workspace key and the forward 127.0.0.1:${TWENTY_LOCAL_PORT} -> ` +
-        `${TWENTY_SERVER_CONTAINER}:${TWENTY_SERVER_PORT} (network ${network}).`,
+        `${TWENTY_SERVER_CONTAINER}:${TWENTY_SERVER_PORT}.`,
     );
     return {
       env: { [PREVIEW_HANDOVER_ENV_NAME]: key },

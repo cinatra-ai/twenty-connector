@@ -52,6 +52,17 @@ const CLI_ENV_NAME_RE = /^CINATRA_EXT_[A-Z0-9_]+__[A-Z0-9_]+$/;
 const CLI_NETWORK_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const CLI_TARGET_HOST_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$/;
 
+// Every line the module logs, word for word: fixed text that carries no
+// runtime value (no exit status, no network name, no key).
+const LOG_LINES = [
+  "  Twenty CRM: cinatra-twenty-1 is not running; no key and no forward are handed to the preview.",
+  "  Twenty CRM: cinatra-twenty-1 is on no user-defined docker network; no key and no forward are handed to the preview.",
+  "  Twenty CRM: the workspace seed failed; no key and no forward are handed to the preview.",
+  "  Twenty CRM: could not mint a workspace key; no key and no forward are handed to the preview.",
+  "  Twenty CRM: hands the preview a workspace key and the forward 127.0.0.1:3300 -> cinatra-twenty-1:3000.",
+  "  Twenty CRM: the handover failed; no key and no forward are handed to the preview.",
+];
+
 function fakeDocker(answers: { inspect?: string | null; seed?: number; mint?: { status: number; stdout: string } } = {}) {
   const calls: string[][] = [];
   const docker = vi.fn((args: string[], opts: { timeoutMs: number }) => {
@@ -131,6 +142,21 @@ describe("previewHostHandover: the host-side mint and the 3300 forward", () => {
     expect(lines.join("\n")).not.toContain(KEY);
     expect(JSON.stringify(calls)).not.toContain(KEY);
     expect(JSON.stringify(out.forwards)).not.toContain(KEY);
+    // Every path's log line is one of the module's fixed lines, never a docker value.
+    const paths: Docker[] = [
+      fakeDocker({ inspect: null }).docker,
+      fakeDocker({ inspect: "true|bridge " }).docker,
+      fakeDocker({ seed: 7 }).docker,
+      fakeDocker({ mint: { status: 9, stdout: `error\n  ${KEY}\n` } }).docker,
+      fakeDocker({ mint: { status: 0, stdout: "no key printed\n" } }).docker,
+      () => {
+        throw new Error(`boom ${KEY}`);
+      },
+    ];
+    for (const path of paths) await previewHostHandover({ log: (line) => lines.push(line), docker: path });
+    expect(lines).toHaveLength(7);
+    expect(lines.filter((line) => !LOG_LINES.includes(line))).toEqual([]);
+    expect(lines.join("\n")).not.toContain(KEY);
   });
 
   it("its default docker runner pipes every output and bounds every call", async () => {
@@ -188,7 +214,7 @@ describe("previewHostHandover: the host-side mint and the 3300 forward", () => {
     expect(await previewHostHandover({ log: () => {}, docker: noKey.docker })).toEqual({});
   });
 
-  it("never throws: a docker runner or a log sink that throws answers nothing handed over", async () => {
+  it("a throwing docker runner answers {} with no key in any line", async () => {
     const { previewHostHandover } = await load();
     const docker = vi.fn(() => {
       throw new Error(`boom ${KEY}`);
@@ -196,6 +222,10 @@ describe("previewHostHandover: the host-side mint and the 3300 forward", () => {
     const lines: string[] = [];
     await expect(previewHostHandover({ log: (line) => lines.push(line), docker })).resolves.toEqual({});
     expect(lines.join("\n")).not.toContain(KEY);
+  });
+
+  it("a throwing log sink never fails the handover: the key and the forward are still answered", async () => {
+    const { previewHostHandover } = await load();
     const throwingLog = () => {
       throw new Error("sink");
     };
