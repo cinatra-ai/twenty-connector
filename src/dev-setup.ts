@@ -18,6 +18,17 @@
 // `@cinatra-ai/host:connector-config` capability. The handed key is used ONLY
 // when the docker probe fails, and ONLY where the docker road would mint.
 //
+// THE REFUSED FIXTURE'S CONNECTION (cinatra#4112, cinatra#4137): when a boot
+// refuses the development fixture account, the host makes the install's
+// connections for the instance's first administrator. A Twenty connection an
+// earlier boot made for the fixture account is handed to that administrator
+// FIRST, before this hook reuses, mints or attaches anything: the hook asks the
+// host's generic hand-over helper (`helpers.reownRefusedFixtureConnection`)
+// for its own row and answers the helper's key check with the same REST probe
+// the reuse step uses. An older host that does not offer the helper still
+// hands the connection over itself before the hooks run, so then the hook
+// does nothing here.
+//
 // SDK imports are TYPE-ONLY (host-peer value-import ban); the host services
 // resolve at call time through the capability port on the hook context.
 
@@ -62,6 +73,22 @@ export const LOCAL_TWENTY = {
 
 const TWENTY_DEV_API_KEY_NAME = "cinatra-dev-auto";
 
+/** The answer of the key check the host's hand-over asks for. */
+export type TwentyKeyCheck = "ok" | "unauthorized" | "unreachable";
+
+/**
+ * The host's generic hand-over of an install-made connection that the
+ * development fixture account REFUSED on this boot owns (cinatra#4137). The
+ * host resolves the refused fixture account and the first administrator it
+ * adopted itself; the hook names only its own server row and how to check the
+ * stored key. Self-declared and OPTIONAL: the connector compiles against the
+ * PUBLISHED SDK, which may not carry this helper, so it is feature-detected.
+ */
+export type RefusedFixtureHandOver = (input: {
+  serverId: string;
+  checkKey: (input: { apiKey: string; serverUrl: string }) => Promise<TwentyKeyCheck>;
+}) => Promise<string>;
+
 export type TwentyDevSetupDeps = {
   registry: Pick<HostExternalMcpRegistryService, "getServerById" | "upsertServer" | "resolveBearer" | "nangoProviderConfigKey"> & {
     /**
@@ -87,6 +114,11 @@ export type TwentyDevSetupDeps = {
    * is never logged and never placed in a status, a reason, a detail or a note.
    */
   handedApiKey?: string | null;
+  /**
+   * The host's hand-over of the refused fixture account's connection
+   * (cinatra#4137), or undefined on an older host that hands it over itself.
+   */
+  handOverRefusedFixtureConnection?: RefusedFixtureHandOver;
 };
 
 export type TwentyBearerOutcome = {
@@ -257,11 +289,120 @@ function handedKeyOf(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+// ---------------------------------------------------------------------------
+// The refused fixture account's connection (cinatra#4112, cinatra#4137).
+// ---------------------------------------------------------------------------
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Loopback, RFC-1918 private, or link-local (incl. the cloud metadata address). */
+function isPrivateOrLinkLocalHost(hostname: string): boolean {
+  const h = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return (
+    h === "localhost" ||
+    h === "::1" ||
+    h.endsWith(".local") ||
+    h.endsWith(".internal") ||
+    /^127\./.test(h) ||
+    /^10\./.test(h) ||
+    /^192\.168\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+    /^169\.254\./.test(h) ||
+    h === "0.0.0.0" ||
+    /^f[cd][0-9a-f]{2}:/.test(h) ||
+    /^fe80:/.test(h)
+  );
+}
+
+/** Drop trailing slashes with a linear scan (no backtracking pattern). */
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return value.slice(0, end);
+}
+
+/**
+ * The REST base of the Twenty instance a row's MCP address points at, under the
+ * rule the host's connect flow applies to an instance address: http only on a
+ * loopback host, https otherwise, and never a private or link-local host. A
+ * trailing slash and one trailing `/mcp` are dropped. Throws on an address the
+ * rule refuses; the host's hand-over then answers "failed" and changes nothing.
+ */
+export function twentyRestBaseOf(serverUrl: string): string {
+  const url = new URL(String(serverUrl ?? "").trim());
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("unsupported instance address");
+  const loopback = LOOPBACK_HOSTS.has(url.hostname);
+  if (url.protocol !== "https:" && !loopback) throw new Error("unsupported instance address");
+  if (!loopback && isPrivateOrLinkLocalHost(url.hostname)) throw new Error("unsupported instance address");
+  const path = withoutTrailingSlashes(url.pathname).replace(/\/mcp$/i, "");
+  return `${url.origin}${path}`;
+}
+
+/**
+ * The key check the host's hand-over asks for: does Twenty still accept the
+ * stored key? The same REST probe the reuse step makes (GET
+ * <instance>/rest/companies?limit=1 with the key as the bearer): "ok" on a 2xx,
+ * "unauthorized" on 401/403, "unreachable" on anything else. SECRET BOUNDARY:
+ * the key goes into that one request and nowhere else.
+ */
+export async function checkTwentyKey(input: { apiKey: string; serverUrl: string }): Promise<TwentyKeyCheck> {
+  return probeTwentyBearer({ baseUrl: twentyRestBaseOf(input.serverUrl), apiKey: input.apiKey });
+}
+
+/** What the hook logs for each hand-over outcome; an outcome that changes nothing logs nothing. */
+const HAND_OVER_SAID: Readonly<Record<string, string>> = {
+  reowned:
+    "the refused fixture account's Twenty connection now belongs to the first administrator (same key)",
+  cleared:
+    "the refused fixture account's Twenty connection had no working key and was removed — " +
+    "the Twenty hook attaches one fresh key for the first administrator",
+  deferred:
+    "the refused fixture account's Twenty connection is kept as it is for now: its key could not be " +
+    "checked against Twenty, or the hand-over did not complete and was undone; a later boot hands it over",
+  failed:
+    "could not hand the refused fixture account's Twenty connection over on this boot — if Twenty " +
+    "stays unconnected, disconnect and reconnect it on the Twenty setup page",
+};
+
+/**
+ * Ask the host to hand the Twenty row's connection from the refused fixture
+ * account to the first administrator (cinatra#4137), and log what happened.
+ * Runs FIRST in the hook, before any probe, reuse, mint or attach. Returns the
+ * host's outcome, or null on an older host without the helper (that host
+ * hands the connection over itself before the hooks run). Never throws: a
+ * throwing helper reads as "failed".
+ */
+export async function handOverRefusedFixtureConnection(
+  deps: Pick<TwentyDevSetupDeps, "handOverRefusedFixtureConnection" | "log">,
+): Promise<string | null> {
+  const handOver = deps.handOverRefusedFixtureConnection;
+  if (typeof handOver !== "function") return null;
+  let outcome: string;
+  try {
+    outcome = await handOver({ serverId: LOCAL_TWENTY.rowId, checkKey: checkTwentyKey });
+  } catch {
+    outcome = "failed";
+  }
+  const line = Object.prototype.hasOwnProperty.call(HAND_OVER_SAID, outcome) ? HAND_OVER_SAID[outcome] : undefined;
+  if (line) {
+    try {
+      deps.log(line);
+    } catch {
+      // A throwing log sink never fails the hook.
+    }
+  }
+  return outcome;
+}
+
 /**
  * The Twenty auto-setup body (exported for tests; `runDevSetup` wraps it with
  * capability resolution).
  */
 export async function autoSetupLocalTwenty(deps: TwentyDevSetupDeps): Promise<ExtensionDevSetupStatus> {
+  // cinatra#4137: the refused fixture account's connection is handed to the
+  // first administrator BEFORE anything below reuses, mints or attaches a key.
+  await handOverRefusedFixtureConnection(deps);
+
   // NEVER-THROW boundary: probeDockerContainer / probeHttp / getServerById are
   // host helpers that may throw; a throw here must yield a soft-fail status, not
   // reject the hook. Fixed reason label only (SECRET BOUNDARY — no raw error).
@@ -398,6 +539,19 @@ function readHandedApiKey(ctx: ExtensionDevSetupContext): string | null {
   }
 }
 
+/** The host's hand-over helper when this host offers it (cinatra#4137), bound
+ * to the helpers object so a helper written as a method keeps its receiver; an
+ * older host without it, or a throwing read, yields undefined. */
+function readHandOver(ctx: ExtensionDevSetupContext): RefusedFixtureHandOver | undefined {
+  try {
+    const helpers = ctx.helpers as { reownRefusedFixtureConnection?: unknown } | null | undefined;
+    const helper = helpers?.reownRefusedFixtureConnection;
+    return typeof helper === "function" ? (helper.bind(helpers) as RefusedFixtureHandOver) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function isNangoSystemSurface(impl: unknown): impl is NangoSystemSurface {
   const c = impl as Partial<NangoSystemSurface> | null;
   return (
@@ -433,5 +587,6 @@ export async function runDevSetup(ctx: ExtensionDevSetupContext): Promise<Extens
     helpers: ctx.helpers,
     log: ctx.log,
     handedApiKey: readHandedApiKey(ctx),
+    handOverRefusedFixtureConnection: readHandOver(ctx),
   });
 }
