@@ -1,0 +1,396 @@
+{
+  "calls": [
+    {
+      "answer": [
+        {
+          "id": "<uuid>",
+          "isCustom": false,
+          "labelSingular": "Person",
+          "namePlural": "people",
+          "nameSingular": "person"
+        },
+        {
+          "id": "<uuid>",
+          "isCustom": false,
+          "labelSingular": "Company",
+          "namePlural": "companies",
+          "nameSingular": "company"
+        }
+      ],
+      "args": {
+        "limit": 100
+      },
+      "id": "get_object_metadata",
+      "tool": "get_object_metadata"
+    },
+    {
+      "answer": [
+        {
+          "id": "<uuid>",
+          "isCustom": true,
+          "label": "inLists",
+          "name": "inLists",
+          "objectMetadataId": "<uuid>",
+          "type": "ARRAY"
+        }
+      ],
+      "args": {
+        "limit": 100,
+        "objectMetadataId": "<uuid>"
+      },
+      "id": "get_field_metadata.person",
+      "tool": "get_field_metadata"
+    },
+    {
+      "answer": [
+        {
+          "id": "<uuid>",
+          "isCustom": true,
+          "label": "inLists",
+          "name": "inLists",
+          "objectMetadataId": "<uuid>",
+          "type": "ARRAY"
+        }
+      ],
+      "args": {
+        "limit": 100,
+        "objectMetadataId": "<uuid>"
+      },
+      "id": "get_field_metadata.company",
+      "tool": "get_field_metadata"
+    },
+    {
+      "answer": {
+        "message": "Record created successfully in person",
+        "result": {
+          "id": "<uuid>"
+        },
+        "success": true
+      },
+      "args": {
+        "cinatraObjectId": "proof-list-<ns>-0",
+        "inLists": [
+          "cinatra-proof-list-<ns>"
+        ],
+        "name": {
+          "firstName": "proof-in",
+          "lastName": "p-0-<ns>"
+        }
+      },
+      "id": "create_person",
+      "tool": "create_person"
+    },
+    {
+      "answer": {
+        "message": "Record created successfully in company",
+        "result": {
+          "id": "<uuid>"
+        },
+        "success": true
+      },
+      "args": {
+        "cinatraObjectId": "proof-list-co-<ns>",
+        "inLists": [
+          "cinatra-proof-list-<ns>"
+        ],
+        "name": "cinatra-proof-co-<ns>"
+      },
+      "id": "create_company",
+      "tool": "create_company"
+    },
+    {
+      "answer": {
+        "message": "Found 1 person records",
+        "recordReferences": [
+          {
+            "displayName": "<display>",
+            "objectNameSingular": "person",
+            "recordId": "<uuid>"
+          }
+        ],
+        "result": {
+          "count": 1,
+          "records": [
+            {
+              "cinatraObjectId": "proof-list-<ns>-0",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>"
+              ],
+              "name": {
+                "firstName": "proof-in",
+                "lastName": "p-0-<ns>"
+              }
+            }
+          ]
+        },
+        "success": true
+      },
+      "args": {
+        "id": "<uuid>"
+      },
+      "id": "find_one_person",
+      "tool": "find_one_person"
+    },
+    {
+      "answer": {
+        "message": "Record updated successfully in person",
+        "result": {
+          "id": "<uuid>"
+        },
+        "success": true
+      },
+      "args": {
+        "id": "<uuid>",
+        "inLists": [
+          "cinatra-proof-list-<ns>",
+          "cinatra-proof-other-<ns>"
+        ]
+      },
+      "id": "update_person",
+      "tool": "update_person"
+    },
+    {
+      "answer": {
+        "message": "Found 1 company records",
+        "recordReferences": [
+          {
+            "displayName": "<display>",
+            "objectNameSingular": "company",
+            "recordId": "<uuid>"
+          }
+        ],
+        "result": {
+          "count": 1,
+          "records": [
+            {
+              "cinatraObjectId": "proof-list-co-<ns>",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>"
+              ],
+              "name": "cinatra-proof-co-<ns>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "args": {
+        "id": "<uuid>"
+      },
+      "id": "find_one_company",
+      "tool": "find_one_company"
+    },
+    {
+      "answer": {
+        "message": "Record updated successfully in company",
+        "result": {
+          "id": "<uuid>"
+        },
+        "success": true
+      },
+      "args": {
+        "id": "<uuid>",
+        "inLists": [
+          "cinatra-proof-list-<ns>",
+          "cinatra-proof-other-<ns>"
+        ]
+      },
+      "id": "update_company",
+      "tool": "update_company"
+    },
+    {
+      "answer": {
+        "icon": "IconList",
+        "id": "<uuid>",
+        "name": "cinatra-proof-list-<ns>",
+        "objectNameSingular": "person",
+        "type": "TABLE",
+        "visibility": "WORKSPACE"
+      },
+      "args": {
+        "name": "cinatra-proof-list-<ns>",
+        "objectNameSingular": "person",
+        "type": "TABLE"
+      },
+      "id": "create_view",
+      "tool": "create_view"
+    },
+    {
+      "answer": {
+        "fieldMetadataId": "<uuid>",
+        "id": "<uuid>",
+        "operand": "CONTAINS",
+        "value": "cinatra-proof-list-<ns>",
+        "viewId": "<uuid>"
+      },
+      "args": {
+        "fieldMetadataId": "<uuid>",
+        "operand": "CONTAINS",
+        "value": "cinatra-proof-list-<ns>",
+        "viewId": "<uuid>"
+      },
+      "id": "create_view_filter",
+      "tool": "create_view_filter"
+    },
+    {
+      "answer": [
+        {
+          "icon": "IconList",
+          "id": "<uuid>",
+          "name": "cinatra-proof-list-<ns>",
+          "objectMetadataId": "<uuid>",
+          "position": 0,
+          "type": "TABLE",
+          "visibility": "WORKSPACE"
+        }
+      ],
+      "args": {
+        "limit": 100,
+        "objectNameSingular": "person"
+      },
+      "id": "get_views",
+      "tool": "get_views"
+    },
+    {
+      "answer": [
+        {
+          "fieldMetadataId": "<uuid>",
+          "id": "<uuid>",
+          "operand": "CONTAINS",
+          "positionInViewFilterGroup": null,
+          "subFieldName": null,
+          "value": "cinatra-proof-list-<ns>",
+          "viewId": "<uuid>"
+        }
+      ],
+      "args": {
+        "viewId": "<uuid>"
+      },
+      "id": "get_view_filters",
+      "tool": "get_view_filters"
+    },
+    {
+      "answer": {
+        "message": "Found 3 person records",
+        "recordReferences": [
+          {
+            "displayName": "<display>",
+            "objectNameSingular": "person",
+            "recordId": "<uuid>"
+          },
+          {
+            "displayName": "<display>",
+            "objectNameSingular": "person",
+            "recordId": "<uuid>"
+          },
+          {
+            "displayName": "<display>",
+            "objectNameSingular": "person",
+            "recordId": "<uuid>"
+          }
+        ],
+        "result": {
+          "count": 3,
+          "records": [
+            {
+              "cinatraObjectId": "proof-list-<ns>-0",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>",
+                "cinatra-proof-other-<ns>"
+              ],
+              "name": {
+                "firstName": "proof-in",
+                "lastName": "p-0-<ns>"
+              }
+            },
+            {
+              "cinatraObjectId": "proof-list-<ns>-1",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>"
+              ],
+              "name": {
+                "firstName": "proof-in",
+                "lastName": "p-1-<ns>"
+              }
+            },
+            {
+              "cinatraObjectId": "proof-list-<ns>-2",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>"
+              ],
+              "name": {
+                "firstName": "proof-in",
+                "lastName": "p-2-<ns>"
+              }
+            }
+          ]
+        },
+        "success": true
+      },
+      "args": {
+        "inLists": {
+          "containsIlike": "cinatra-proof-list-<ns>"
+        },
+        "limit": 100
+      },
+      "id": "find_people.members",
+      "tool": "find_people"
+    },
+    {
+      "answer": {
+        "message": "Found 1 company records",
+        "recordReferences": [
+          {
+            "displayName": "<display>",
+            "objectNameSingular": "company",
+            "recordId": "<uuid>"
+          }
+        ],
+        "result": {
+          "count": 1,
+          "records": [
+            {
+              "cinatraObjectId": "proof-list-co-<ns>",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>",
+                "cinatra-proof-other-<ns>"
+              ],
+              "name": "cinatra-proof-co-<ns>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "args": {
+        "inLists": {
+          "containsIlike": "cinatra-proof-list-<ns>"
+        },
+        "limit": 100
+      },
+      "id": "find_companies.members",
+      "tool": "find_companies"
+    },
+    {
+      "answer": {
+        "error": "Object \"cinatraproofmissing\" not found. Use get_object_metadata to list available objects.",
+        "message": "Failed to execute create_view",
+        "success": false
+      },
+      "args": {
+        "name": "cinatra-proof-missing-<ns>",
+        "objectNameSingular": "cinatraproofmissing",
+        "type": "TABLE"
+      },
+      "id": "create_view.failure",
+      "tool": "create_view"
+    }
+  ],
+  "image": "sha256:4207fe56527e21c0e0ab6602bb1c6be7d001396001a38a94045291de4abc6da8",
+  "source": "pinned-source",
+  "twentyTag": "2.7.3"
+}
