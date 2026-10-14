@@ -26,6 +26,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { getTwentyDeps, type ExternalMcpServerRecordShape } from "./deps";
+import { readToolOutput as readContractToolOutput } from "./twenty-tool-contract.mjs";
 
 export const TWENTY_WORKSPACE_ROW_ID = "twenty-workspace";
 
@@ -75,10 +76,9 @@ type ToolsCallResult = {
 /**
  * Call `tools/call name=execute_tool` against the live Twenty MCP server.
  *
- * Returns the parsed `content` array from the JSON-RPC `result`. Most Twenty
- * catalog tools return a single `{ type: "text", text: <JSON string> }` entry
- * — callers typically `JSON.parse(content[0].text)` to get the structured
- * payload.
+ * Returns the JSON-RPC `result`. Twenty catalog tools return a single
+ * `{ type: "text", text: <JSON string> }` entry — callers read it with
+ * `readToolOutput`, which also throws on a `{ success: false }` answer.
  *
  * Throws TwentyConfigError when no Twenty row is configured / enabled.
  * Throws TwentyMcpError on upstream JSON-RPC errors.
@@ -165,22 +165,21 @@ export async function executeTwentyMcpTool(
   return parsed.result;
 }
 
-/** Extract the first text-content entry's payload as a parsed JSON value. */
-export function readJsonContent<T = unknown>(result: ToolsCallResult): T {
-  const entry = result.content?.find((c) => c.type === "text") as
-    | { type: "text"; text: string }
-    | undefined;
-  if (!entry) {
-    throw new TwentyMcpError(-32603, "tool result has no text content");
-  }
-  try {
-    return JSON.parse(entry.text) as T;
-  } catch (err) {
-    throw new TwentyMcpError(
-      -32603,
-      `failed to parse tool result as JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+/**
+ * Read one `execute_tool` result as the tool's parsed answer. Twenty reports a
+ * failed tool as ordinary content (`{ success: false, message, error }`), never
+ * as an MCP error, so this is the one place that turns every failure into a
+ * thrown TwentyMcpError: the MCP error flag, a missing or unparsable text entry,
+ * and a `success: false` answer. Callers then read the answer's shape with the
+ * readers of src/twenty-tool-contract.mjs.
+ */
+export function readToolOutput(toolName: string, result: ToolsCallResult): unknown {
+  return readContractToolOutput(toolName, result, twentyMcpError);
+}
+
+/** The error factory the contract readers throw through. */
+export function twentyMcpError(code: number, message: string, data?: unknown): TwentyMcpError {
+  return new TwentyMcpError(code, message, data);
 }
 
 function parseSseEnvelope(text: string): {

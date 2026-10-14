@@ -15,9 +15,18 @@
 //   8. Metadata API: create-or-find 7 custom fields on Person + Company
 //   9. MCP-driven CRUD smoke — full round-trip: Company + Person + link +
 //      read-back + update + person-delete
-//  10. Views proof — tag 3 Persons with inLists, query find_people, assert the
-//      list slug appears ≥ 3 times in the result. Strict filter-arg shape +
-//      500/5000 scale + actual create_view are out of scope here.
+//  10. Lists proof + tool-contract record — through the connector's own
+//      contract (src/twenty-tool-contract.mjs): tag 3 Persons (and 1 Company)
+//      into a list, leave 1 Person out, create the list's view and its
+//      `inLists CONTAINS <slug>` filter and read both back by id, read the
+//      members with getListMembers' exact arguments (paged) and assert EXACTLY
+//      the tagged ids, add a second slug and assert the first is kept, and
+//      assert a `{ success: false }` answer throws. Every call is recorded,
+//      sanitized, printed between the TWENTY TOOL CONTRACT RECORD markers and
+//      compared with scripts/twenty-bootstrap/fixtures/twenty-tool-answers.json
+//      (contract projection; CI: drift is FAIL, UPDATE_FIXTURES=1 rewrites it
+//      on a local run, and refuses to while the lists proof has problems). A
+//      recorded find answer keeps only this run's own fixture records.
 //  11. Batch behaviour — 60-row find_people (catalog-confirmed name). The
 //      500-row throttle meter is out of scope here.
 //  12. Deeplink (three-part assertion):
@@ -46,6 +55,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { TwentyClient, maskToken } from "./lib/twenty-client.mjs";
 import { canonicalizeSnapshot, diffSnapshots } from "./lib/twenty-snapshot.mjs";
+import { canonicalJson, diffRecords, sanitize } from "./lib/twenty-contract-record.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 // The proof runs AGAINST a cinatra core checkout: the docker compose stack,
@@ -88,7 +98,12 @@ const {
   parseTwentyApiKey,
 } = await import(pathToFileURL(join(SCRIPT_DIR, "..", "..", "src", "twenty-keygen.mjs")).href);
 
+// The connector's tool contract (argument builders + answer readers): the same
+// module the connector calls through, so this proof's live run tests it.
+const contract = await import(pathToFileURL(join(SCRIPT_DIR, "..", "..", "src", "twenty-tool-contract.mjs")).href);
+
 const SNAPSHOT_PATH = join(SCRIPT_DIR, "twenty-mcp-tools.json");
+const CONTRACT_FIXTURES_PATH = join(SCRIPT_DIR, "fixtures", "twenty-tool-answers.json");
 const LOCAL_TOKEN_PATH = join(CORE_ROOT, "data", "twenty", "bootstrap.local.json");
 // Provenance sidecar for the generic dev-content fixtures (fixtureId -> {id,rev}).
 // Gitignored (/data/ in the core checkout). Lets re-runs skip/replace without
@@ -97,6 +112,9 @@ const TWENTY_FIXTURE_PROV_PATH = join(CORE_ROOT, "data", "twenty", "dev-content-
 
 const CI_MODE = process.env.CINATRA_CI === "1";
 const UPDATE_SNAPSHOT = process.env.UPDATE_SNAPSHOT === "1";
+const UPDATE_FIXTURES = process.env.UPDATE_FIXTURES === "1";
+// The pinned Twenty release the workflow pulls (TWENTY_TAG), recorded without its leading "v".
+const TWENTY_RELEASE = (process.env.TWENTY_TAG || "2.7.3").replace(/^v/, "");
 const TWENTY_CONTAINER = process.env.TWENTY_CONTAINER || "cinatra-twenty-1";
 const TWENTY_BASE_URL = process.env.TWENTY_BASE_URL || "http://localhost:3300";
 const API_KEY_NAME = `cinatra-bootstrap${CI_MODE ? `-ci-${process.env.GITHUB_RUN_ID || Date.now()}` : ""}`;
@@ -708,72 +726,234 @@ function extractRecordId(toolCallResult) {
   return null;
 }
 
-async function step10_views(client, nativeTools, catalogToolNames) {
-  // Actually tag persons with `inLists` and prove the View membership query
-  // returns exactly the tagged ones. Smaller scale (3 in / 1 out) — the
-  // 500/5000 scale-out belongs with the real cinatra connector code.
+// The running image's registry digest (the same on every docker image store, unlike a local image id).
+function twentyImageId() {
+  const ref = spawnSync("docker", ["inspect", "--format", "{{.Config.Image}}", TWENTY_CONTAINER], { encoding: "utf8" });
+  const image = (ref.stdout || "").trim();
+  if (ref.status !== 0 || !image) return null;
+  const out = spawnSync("docker", ["image", "inspect", "--format", "{{range .RepoDigests}}{{println .}}{{end}}", image], {
+    encoding: "utf8",
+  });
+  const m = /@(sha256:[0-9a-f]{64})/.exec(out.stdout || "");
+  return out.status === 0 && m ? m[1] : null;
+}
+
+function sameIds(actual, expected) {
+  const a = [...actual].sort();
+  const b = [...expected].sort();
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+async function step10_lists(client, nativeTools) {
+  // The lists proof runs the connector's own contract (src/twenty-tool-contract.mjs)
+  // against the live Twenty: the arguments getListMembers, createList,
+  // addListMember and the record writes send, and the readers they read the
+  // answers with. Every assertion failure is a hard FAIL.
   const exec = nativeTools.find((t) => t.name === "execute_tool");
   if (!exec) {
-    record("crm-bootstrap-step-08", "WARN", "execute_tool not present; views proof skipped");
+    record("crm-bootstrap-step-08", "FAIL", "execute_tool not present; the lists proof cannot run");
     return;
   }
-  const tool = (re) => catalogToolNames.find((n) => re.test(n));
-  const createPerson = tool(/^create_person$/i) || "create_person";
-  const findPeople = tool(/^find_people$/i) || "find_people";
-  const listSlug = `smoke-list-${FIXTURE_NS}`;
+  const ns = FIXTURE_NS;
+  const san = { ns, keyName: API_KEY_NAME };
+  const slug = `cinatra-proof-list-${ns}`;
+  const other = `cinatra-proof-other-${ns}`;
+  const calls = [];
+  const problems = [];
+  // The ids of the records this run creates: a recorded find answer keeps only these.
+  const own = new Set();
+  let passed = false;
+
+  // A find answer projected to this run's own records (and their references), so the
+  // record never carries another record of the workspace, whatever the filter matched.
+  function ownRecordsOnly(answer) {
+    const out = { ...answer, result: { ...answer.result, records: answer.result.records.filter((r) => own.has(r?.id)) } };
+    if (Array.isArray(answer.recordReferences)) out.recordReferences = answer.recordReferences.filter((r) => own.has(r?.recordId));
+    return out;
+  }
+
+  // One execute_tool call; `id` names it in the record (null: not recorded),
+  // `keep` trims a long array answer to the entries the connector reads, and a
+  // find answer is projected to this run's own records.
+  async function call(id, tool, args, keep) {
+    const res = await client.mcpToolsCall("execute_tool", { toolName: tool, arguments: args });
+    if (id) {
+      const text = (res?.content || []).find((c) => c?.type === "text")?.text;
+      let answer;
+      try {
+        answer = JSON.parse(text);
+      } catch {
+        answer = { unparsable: String(text ?? "").slice(0, 200) };
+      }
+      if (keep && Array.isArray(answer)) answer = keep(answer);
+      else if (answer && Array.isArray(answer.result?.records)) answer = ownRecordsOnly(answer);
+      calls.push({ id, tool, args: sanitize(args, san), answer: sanitize(answer, san) });
+    }
+    return res;
+  }
+  const read = (tool, res) => contract.readToolOutput(tool, res);
 
   try {
-    // 3 tagged + 1 untagged
-    for (let i = 0; i < 3; i++) {
-      await client.mcpToolsCall("execute_tool", {
-        toolName: createPerson,
-        arguments: {
-          name: { firstName: "smoke-in", lastName: `p-${i}-${FIXTURE_NS}` },
-          cinatraObjectId: `smoke-views-${FIXTURE_NS}-${i}`,
-          inLists: [listSlug],
-        },
-      });
+    // Metadata: the person and company objects and their `inLists` fields.
+    const objects = contract.readArrayAnswer(
+      "get_object_metadata",
+      read("get_object_metadata", await call("get_object_metadata", "get_object_metadata", contract.getObjectMetadataArgs(),
+        (a) => a.filter((o) => o && (o.nameSingular === "person" || o.nameSingular === "company")))),
+    );
+    const objectIds = contract.objectIdsFrom(objects);
+    if (!objectIds) throw new Error("get_object_metadata names no person and company objects");
+    const fieldIds = {};
+    for (const [type, name] of [["contact", "person"], ["account", "company"]]) {
+      const fields = contract.readArrayAnswer(
+        "get_field_metadata",
+        read("get_field_metadata", await call(`get_field_metadata.${name}`, "get_field_metadata",
+          contract.getFieldMetadataArgs(objectIds[type]), (a) => a.filter((f) => f && f.name === contract.LIST_FIELD))),
+      );
+      fieldIds[type] = contract.listFieldIdFrom(fields);
+      if (!fieldIds[type]) throw new Error(`get_field_metadata names no ${contract.LIST_FIELD} field on ${name}`);
     }
-    await client.mcpToolsCall("execute_tool", {
-      toolName: createPerson,
-      arguments: {
-        name: { firstName: "smoke-out", lastName: `p-x-${FIXTURE_NS}` },
-        cinatraObjectId: `smoke-views-${FIXTURE_NS}-x`,
-        inLists: [`other-list-${FIXTURE_NS}`],
-      },
-    });
 
-    // Query members of the list. Twenty's `find_people` accepts a `filter` arg;
-    // exact shape varies across versions, so we use it loosely. If filter
-    // semantics differ in the pinned 2.7.3, this step degrades to a WARN with the row count
-    // we actually observed — still useful as a baseline.
-    const result = await client.mcpToolsCall("execute_tool", {
-      toolName: findPeople,
-      arguments: { limit: 60 },
-    });
-    const text = (result?.content || []).find((c) => c?.type === "text")?.text || "";
-    let payload = null;
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = null;
+    // Records: 3 people and 1 company tagged into the list, 1 person left out.
+    const tagged = [];
+    // The connector's own write builders (createContact / createAccount).
+    for (let i = 0; i < 3; i++) {
+      const args = contract.createRecordArgs("contact", {
+        name: `proof-in p-${i}-${ns}`,
+        cinatraObjectId: `proof-list-${ns}-${i}`,
+        inLists: [slug],
+      });
+      tagged.push(contract.readWrittenId("create_person", read("create_person", await call(i === 0 ? "create_person" : null, "create_person", args))));
+      own.add(tagged[i]);
     }
-    // Count persons whose serialized inLists includes the listSlug. We do this
-    // in-memory to keep the proof tolerant to filter-arg shape drift.
-    const haystack = JSON.stringify(payload || result);
-    const matches = haystack.split(listSlug).length - 1;
-    if (matches >= 3) {
-      record("crm-bootstrap-step-08", "PASS", `views fixture: ${matches}× inLists="${listSlug}" tags visible in find_people result`);
+    own.add(contract.readWrittenId("create_person", read("create_person", await call(null, "create_person", contract.createRecordArgs("contact", {
+      name: `proof-out p-x-${ns}`,
+      cinatraObjectId: `proof-list-${ns}-x`,
+      inLists: [other],
+    })))));
+    const companyId = contract.readWrittenId("create_company", read("create_company", await call("create_company", "create_company", contract.createRecordArgs("account", {
+      name: `cinatra-proof-co-${ns}`,
+      cinatraObjectId: `proof-list-co-${ns}`,
+      inLists: [slug],
+    }))));
+    own.add(companyId);
+
+    // addListMember's road: read the record, add a second slug, write, re-read — the first slug stays.
+    for (const [type, id] of [["contact", tagged[0]], ["account", companyId]]) {
+      const o = contract.OBJECTS[type];
+      const before = contract.readFindOne(o.findOne, read(o.findOne, await call(o.findOne, o.findOne, contract.findOneArgs(id))));
+      if (!before || before.id !== id) problems.push(`${o.findOne}: the record ${id} was not read back by id`);
+      const next = contract.slugsWith(contract.readListSlugs(o.findOne, before), other);
+      if (!next) problems.push(`${o.findOne}: the new record already carries ${other}`);
+      const written = contract.readWrittenId(o.update, read(o.update, await call(o.update, o.update,
+        contract.membershipUpdateArgs(id, next ?? [slug, other]))));
+      if (written !== id) problems.push(`${o.update}: answered id ${written}, not ${id}`);
+      const after = contract.readFindOne(o.findOne, read(o.findOne, await call(null, o.findOne, contract.findOneArgs(id))));
+      const kept = contract.slugsOf(after);
+      if (!kept.includes(slug) || !kept.includes(other)) {
+        problems.push(`${o.update}: after adding a second list the record holds [${kept.join(", ")}], not both slugs`);
+      }
+    }
+
+    // createList's road: the view and its list filter, each read back by id.
+    const view = contract.readCreatedEntity("create_view", read("create_view", await call("create_view", "create_view",
+      contract.createViewArgs({ name: slug, objectType: "contact" }))));
+    const filter = contract.readCreatedEntity("create_view_filter", read("create_view_filter", await call("create_view_filter", "create_view_filter",
+      contract.createListFilterArgs({ viewId: view.id, fieldMetadataId: fieldIds.contact, slug }))));
+    const views = contract.readArrayAnswer("get_views", read("get_views", await call("get_views", "get_views",
+      contract.getViewsArgs("contact"), (a) => a.filter((v) => v && v.id === view.id))));
+    if (!views.some((v) => v.id === view.id)) problems.push(`create_view: the view ${view.id} is not among get_views' person views`);
+    const filters = contract.readArrayAnswer("get_view_filters", read("get_view_filters", await call("get_view_filters", "get_view_filters",
+      contract.getViewFiltersArgs(view.id))));
+    if (!filters.some((f) => f.id === filter.id)) problems.push(`create_view_filter: the filter ${filter.id} is not among the view's filters`);
+    if (contract.listSlugFromFilters(filters, fieldIds.contact) !== slug) {
+      problems.push("get_view_filters: the list slug is not read back from the view's inLists filter");
+    }
+
+    // getListMembers' road: the membership filter, paged — exactly the tagged records.
+    const members = async (type, recordId, pageSize) => {
+      const tool = contract.OBJECTS[type].find;
+      const rows = await contract.readAllPages(async (page) => contract.readFindPage(tool, read(tool, await call(
+        page.offset === 0 ? recordId : null, tool, contract.findArgs(contract.membershipFilter(slug), page)))), { pageSize });
+      return rows.map((r) => r.id);
+    };
+    const people = await members("contact", "find_people.members");
+    if (!sameIds(people, tagged)) problems.push(`find_people: the list's members are ${people.length} record(s), not exactly the 3 tagged people`);
+    const paged = await members("contact", null, 2);
+    if (!sameIds(paged, tagged)) problems.push(`find_people: paging by 2 read ${paged.length} record(s), not exactly the 3 tagged people`);
+    const companies = await members("account", "find_companies.members");
+    if (!sameIds(companies, [companyId])) problems.push(`find_companies: the list's members are ${companies.length} record(s), not exactly the tagged company`);
+
+    // The argument shape the connector sent before this change, for the record: never the members.
+    try {
+      const earlier = read("find_people", await call(null, "find_people", { filter: { inLists: { contains: slug } }, limit: 1000 }));
+      const n = Array.isArray(earlier?.result?.records) ? earlier.result.records.length : "no";
+      log("info", `the earlier argument shape { filter: { inLists: { contains } }, limit: 1000 } answers ${n} record(s)`);
+    } catch (err) {
+      log("info", `the earlier argument shape { filter: { inLists: { contains } } } is refused: ${sanitize(String(err.message), san).slice(0, 200)}`);
+    }
+
+    // A failed tool answers { success: false } as ordinary content: the reader throws.
+    let threw = false;
+    try {
+      read("create_view", await call("create_view.failure", "create_view", {
+        name: `cinatra-proof-missing-${ns}`,
+        objectNameSingular: "cinatraproofmissing",
+        type: contract.LIST_VIEW_TYPE,
+      }));
+    } catch (err) {
+      threw = err?.code === -32000;
+    }
+    if (!threw) problems.push("create_view on an unknown object: the { success: false } answer did not throw");
+
+    if (problems.length > 0) {
+      record("crm-bootstrap-step-08", "FAIL", `lists proof: ${problems.length} problem(s): ${sanitize(problems.join(" | "), san).slice(0, 600)}`);
     } else {
+      passed = true;
       record(
         "crm-bootstrap-step-08",
-        "WARN",
-        `views fixture: only ${matches} occurrences of "${listSlug}" in find_people result; filter-arg shape may need further refinement`,
+        "PASS",
+        `lists proof: members = exactly the 3 tagged people (paged by 100 and by 2) and the 1 tagged company; view + inLists filter read back by id; a second list keeps the first; success:false throws`,
       );
     }
   } catch (err) {
-    record("crm-bootstrap-step-08", "WARN", `views proof partial: ${err.message.slice(0, 240)}`);
+    record("crm-bootstrap-step-08", "FAIL", `lists proof: ${sanitize(String(err?.message ?? err), san).slice(0, 400)}`);
+  } finally {
+    await recordContract(calls, passed);
   }
+}
+
+// `listsPassed`: the lists proof (crm-bootstrap-step-08) passed. A record of a run
+// with problems is printed and compared, but never written over the fixtures.
+async function recordContract(calls, listsPassed) {
+  const live = { calls, image: twentyImageId(), source: "recorded", twentyTag: TWENTY_RELEASE };
+  process.stdout.write(`=== TWENTY TOOL CONTRACT RECORD BEGIN ===\n${canonicalJson(live)}=== TWENTY TOOL CONTRACT RECORD END ===\n`);
+  if (UPDATE_FIXTURES && !CI_MODE && !listsPassed) {
+    record("crm-bootstrap-step-08r", "FAIL", "UPDATE_FIXTURES refused: the lists proof (crm-bootstrap-step-08) has problems, so the fixtures are kept");
+    return;
+  }
+  if (UPDATE_FIXTURES && !CI_MODE) {
+    await mkdir(dirname(CONTRACT_FIXTURES_PATH), { recursive: true });
+    await writeFile(CONTRACT_FIXTURES_PATH, canonicalJson(live), "utf8");
+    record("crm-bootstrap-step-08r", "PASS", `wrote ${calls.length} recorded calls to the contract fixtures`);
+    return;
+  }
+  if (!existsSync(CONTRACT_FIXTURES_PATH)) {
+    record("crm-bootstrap-step-08r", CI_MODE ? "FAIL" : "WARN", "no committed contract fixtures to compare with");
+    return;
+  }
+  const committed = JSON.parse(await readFile(CONTRACT_FIXTURES_PATH, "utf8"));
+  const diff = diffRecords(committed, live);
+  if (diff) {
+    const lines = diff.split("\n");
+    for (const line of lines) log("warn", `contract drift: ${line.slice(0, 1200)}`);
+    record(
+      "crm-bootstrap-step-08r",
+      CI_MODE ? "FAIL" : "WARN",
+      `tool-contract drift: ${lines.length} difference(s) against fixtures/twenty-tool-answers.json; first: ${lines[0].slice(0, 300)}`,
+    );
+    return;
+  }
+  record("crm-bootstrap-step-08r", "PASS", `tool-contract record matches the committed fixtures (${calls.length} calls, image ${live.image})`);
 }
 
 async function step11_batch(client, nativeTools, catalogToolNames) {
@@ -1028,9 +1208,9 @@ async function main() {
     record("crm-bootstrap-step-07", "WARN", `crud smoke crashed: ${err.message}`);
   }
   try {
-    await step10_views(client, nativeTools, catalogToolNames);
+    await step10_lists(client, nativeTools);
   } catch (err) {
-    record("crm-bootstrap-step-08", "WARN", `views proof crashed: ${err.message}`);
+    record("crm-bootstrap-step-08", "FAIL", `lists proof crashed: ${err.message}`);
   }
   try {
     await step11_batch(client, nativeTools, catalogToolNames);

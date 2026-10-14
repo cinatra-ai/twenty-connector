@@ -1,0 +1,96 @@
+// Type declarations for the dependency-free Twenty tool contract
+// (src/twenty-tool-contract.mjs) so the TS connector consumes it typed.
+// Keep in lockstep with the .mjs.
+
+export type RecordType = "contact" | "account";
+export type MakeError = (code: number, message: string, data?: unknown) => Error;
+export type ToolCallResult = {
+  content?: Array<{ type: string; text?: string; [k: string]: unknown }>;
+  isError?: boolean;
+  [k: string]: unknown;
+};
+export type TwentyObjectTools = {
+  readonly nameSingular: string;
+  readonly find: string;
+  readonly findOne: string;
+  readonly create: string;
+  readonly update: string;
+};
+export type FindPage<R = Record<string, unknown>> = { records: R[]; count: number | null };
+
+export declare const FIND_PAGE_LIMIT: number;
+export declare const VIEWS_LIMIT: number;
+export declare const FIELD_METADATA_LIMIT: number;
+export declare const LIST_FIELD: "inLists";
+export declare const LIST_FILTER_OPERAND: "CONTAINS";
+export declare const LIST_VIEW_TYPE: "TABLE";
+export declare const SLUG_PATTERN: RegExp;
+export declare const OBJECTS: Readonly<Record<RecordType, TwentyObjectTools>>;
+
+export declare class TwentyToolContractError extends Error {
+  readonly code: number;
+  readonly data?: unknown;
+  constructor(code: number, message: string, data?: unknown);
+}
+
+export declare function readToolOutput(toolName: string, callResult: ToolCallResult, makeError?: MakeError): unknown;
+export declare function readFindPage<R = Record<string, unknown>>(toolName: string, payload: unknown, makeError?: MakeError): FindPage<R>;
+export declare function readFindOne<R = Record<string, unknown>>(toolName: string, payload: unknown, makeError?: MakeError): R | null;
+export declare function readWrittenId(toolName: string, payload: unknown, makeError?: MakeError): string;
+export declare function readArrayAnswer<R = Record<string, unknown>>(toolName: string, payload: unknown, makeError?: MakeError): R[];
+export declare function readCreatedEntity<R extends { id: string } = { id: string; [k: string]: unknown }>(
+  toolName: string,
+  payload: unknown,
+  makeError?: MakeError,
+): R;
+
+export declare function personSearchFilter(query: string | null | undefined): Record<string, unknown>;
+export declare function companySearchFilter(query: string | null | undefined): Record<string, unknown>;
+export declare function emailFilter(email: string): Record<string, unknown>;
+export declare function membershipFilter(slug: string): Record<string, unknown>;
+export declare function splitPersonName(full: string | null | undefined): { firstName?: string; lastName?: string };
+export declare function contactWriteFields(input: object): Record<string, unknown>;
+export declare function accountWriteFields(input: object): Record<string, unknown>;
+export declare function createRecordArgs(objectType: RecordType, input: object): Record<string, unknown>;
+export declare function updateRecordArgs(
+  objectType: RecordType,
+  id: string,
+  patch: object,
+): Record<string, unknown> | null;
+export declare function membershipUpdateArgs(id: string, slugs: string[]): { id: string; inLists: string[] };
+export declare function findArgs(
+  filter: Record<string, unknown> | null | undefined,
+  page?: { limit?: number; offset?: number },
+): Record<string, unknown>;
+export declare function findOneArgs(id: string): { id: string };
+export declare function getViewsArgs(objectType: RecordType): { objectNameSingular: string; limit: number };
+export declare function getObjectMetadataArgs(): { limit: number };
+export declare function getFieldMetadataArgs(objectMetadataId: string): { objectMetadataId: string; limit: number };
+export declare function getViewFiltersArgs(viewId: string): { viewId: string };
+export declare function createViewArgs(input: { name: string; objectType: RecordType }): {
+  name: string;
+  objectNameSingular: string;
+  type: "TABLE";
+};
+export declare function createListFilterArgs(input: { viewId: string; fieldMetadataId: string; slug: string }): {
+  viewId: string;
+  fieldMetadataId: string;
+  operand: "CONTAINS";
+  value: string;
+};
+
+export declare function objectFor(objectType: RecordType): TwentyObjectTools;
+export declare function slugify(name: string | null | undefined): string;
+export declare function isSlug(value: unknown): value is string;
+export declare function listSlugFromFilters(filters: unknown, listFieldMetadataId: string | null | undefined): string | null;
+export declare function listFieldIdFrom(fields: unknown): string | null;
+export declare function objectIdsFrom(objects: unknown): { contact: string; account: string } | null;
+export declare function slugsOf(record: unknown): string[];
+export declare function readListSlugs(toolName: string, record: unknown, makeError?: MakeError): string[];
+export declare function viewsAtCeiling(views: unknown): boolean;
+export declare function slugsWith(current: string[] | null | undefined, slug: string): string[] | null;
+export declare function slugsWithout(current: string[] | null | undefined, slug: string): string[] | null;
+export declare function readAllPages<R = Record<string, unknown>>(
+  callPage: (page: { limit: number; offset: number }) => Promise<FindPage<R>>,
+  options?: { want?: number; pageSize?: number; maxPages?: number },
+): Promise<R[]>;
