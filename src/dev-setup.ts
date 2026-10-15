@@ -29,6 +29,14 @@
 // hands the connection over itself before the hooks run, so then the hook
 // does nothing here.
 //
+// THE CONNECTOR'S CUSTOM FIELDS (cinatra-ai/twenty-connector#83): the connector
+// keeps list membership in a person's or company's `inLists` array and reads
+// four more custom fields. Once the row has a working key, the hook creates
+// any of them that the workspace lacks, through Twenty's own MCP metadata
+// tools with that key (src/twenty-schema-provision.mjs, which reads every
+// answer through the tool contract, src/twenty-tool-contract.mjs).
+// Idempotent; a failure is logged with fixed words and never fails the hook.
+//
 // SDK imports are TYPE-ONLY (host-peer value-import ban); the host services
 // resolve at call time through the capability port on the hook context.
 
@@ -45,6 +53,8 @@ import {
   parseTwentyApiKey,
   probeTwentyBearer,
 } from "./twenty-keygen.mjs";
+import { mcpToolSender, provisionConnectorFields } from "./twenty-schema-provision.mjs";
+import { CONNECTOR_CUSTOM_FIELDS } from "./twenty-tool-contract.mjs";
 
 /** This package's name — the key the host's env-override reader is asked for. */
 export const TWENTY_PACKAGE_NAME = "@cinatra-ai/twenty-connector";
@@ -394,6 +404,58 @@ export async function handOverRefusedFixtureConnection(
   return outcome;
 }
 
+// ---------------------------------------------------------------------------
+// The connector's custom fields (cinatra-ai/twenty-connector#83).
+// ---------------------------------------------------------------------------
+
+/**
+ * Create the custom fields the connector reads and writes that the workspace
+ * lacks, with the row's own key: the key is read back through the host's gated
+ * resolver (the road the connector's own calls take) and used for the MCP
+ * metadata calls only. Returns a short note for the status detail; logs one
+ * fixed line when a field is still missing. Never throws. SECRET BOUNDARY: the
+ * key reaches the MCP request's Authorization header and nothing else.
+ */
+export async function provisionTwentyConnectorFields(
+  deps: Pick<TwentyDevSetupDeps, "registry" | "log">,
+): Promise<string> {
+  let apiKey: string | null = null;
+  try {
+    const row = deps.registry.getServerById(LOCAL_TWENTY.rowId);
+    apiKey = row ? await deps.registry.resolveBearer(row) : null;
+  } catch {
+    apiKey = null;
+  }
+  if (!apiKey) return "custom fields not checked (no resolvable key)";
+  let note: string;
+  let missing: string[];
+  try {
+    const outcome = await provisionConnectorFields({
+      send: mcpToolSender({ mcpUrl: LOCAL_TWENTY.mcpUrl, apiKey }),
+    });
+    missing = outcome.conflicts;
+    note =
+      missing.length === 0
+        ? `custom fields: ${CONNECTOR_CUSTOM_FIELDS.length} present (${outcome.created.length} created)`
+        : `custom fields incomplete: ${missing.join(", ")}`;
+  } catch {
+    // SECRET BOUNDARY: a fixed label — never the raw thrown message.
+    missing = ["(unread)"];
+    note = "custom fields not checked (metadata read failed)";
+  }
+  if (missing.length > 0) {
+    try {
+      deps.log(
+        `${note} — CRM lists read no members until the person and company custom fields exist; ` +
+          "the workspace key needs the data-model permission, and the next dev boot tries again.",
+      );
+    } catch {
+      // A throwing log sink never fails the hook.
+    }
+  }
+  return note;
+}
+
 /**
  * The Twenty auto-setup body (exported for tests; `runDevSetup` wraps it with
  * capability resolution).
@@ -477,6 +539,9 @@ export async function autoSetupLocalTwenty(deps: TwentyDevSetupDeps): Promise<Ex
     );
   }
 
+  // cinatra-ai/twenty-connector#83: the custom fields, once a working key exists.
+  const fieldsNote = bearer.working ? await provisionTwentyConnectorFields(deps) : null;
+
   const bearerNote = bearer.minted
     ? "bearer auto-minted + attached"
     : bearer.handed
@@ -490,7 +555,8 @@ export async function autoSetupLocalTwenty(deps: TwentyDevSetupDeps): Promise<Ex
     siteUrl: LOCAL_TWENTY.serverUrl,
     detail:
       `row ${LOCAL_TWENTY.rowId} ${existing ? "refreshed" : "created"} ` +
-      `(${LOCAL_TWENTY.allowedCatalogTools.length} catalog tools allowed; ${bearerNote})`,
+      `(${LOCAL_TWENTY.allowedCatalogTools.length} catalog tools allowed; ${bearerNote}` +
+      `${fieldsNote ? `; ${fieldsNote}` : ""})`,
   };
 }
 

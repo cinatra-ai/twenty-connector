@@ -41,8 +41,10 @@ const OBJECTS = [
   { id: "obj-person", nameSingular: "person" },
   { id: "obj-company", nameSingular: "company" },
 ];
-const FIELDS = { seq: [[{ id: "fld-person-inlists", name: "inLists" }], [{ id: "fld-company-inlists", name: "inLists" }]] };
-const PERSON_FIELDS = [{ id: "fld-person-inlists", name: "inLists" }];
+const FIELDS = {
+  seq: [[{ id: "fld-person-inlists", name: "inLists", type: "ARRAY" }], [{ id: "fld-company-inlists", name: "inLists", type: "ARRAY" }]],
+};
+const PERSON_FIELDS = [{ id: "fld-person-inlists", name: "inLists", type: "ARRAY" }];
 const listFilter = (viewId: string, slug: string, field = "fld-person-inlists") => [
   { id: `f-${viewId}`, viewId, fieldMetadataId: field, operand: "CONTAINS", value: slug },
 ];
@@ -351,7 +353,7 @@ describe("twentyConnector — lists / Views", () => {
   it("createList for objectType=account preserves the caller's objectType in the return + queries get_object_metadata first", async () => {
     setupExecResult({
       get_object_metadata: OBJECTS,
-      get_field_metadata: [{ id: "fld-company-inlists", name: "inLists" }],
+      get_field_metadata: [{ id: "fld-company-inlists", name: "inLists", type: "ARRAY" }],
       get_views: [],
       create_view: { id: "v-acc", name: "Customers", objectNameSingular: "company", type: "TABLE" },
       create_view_filter: { id: "f-acc", viewId: "v-acc", fieldMetadataId: "fld-company-inlists", operand: "CONTAINS", value: "customers" },

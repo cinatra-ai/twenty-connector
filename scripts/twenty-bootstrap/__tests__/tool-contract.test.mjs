@@ -8,6 +8,7 @@ import {
 } from "../lib/twenty-contract-record.mjs";
 // A namespace import: a name the module does not export reads as undefined in a case, never as a load failure.
 import * as snapshotLib from "../lib/twenty-snapshot.mjs";
+import * as recordLib from "../lib/twenty-contract-record.mjs";
 
 // The committed tool-contract fixtures, replayed through the connector's own
 // readers and builders (src/twenty-tool-contract.mjs). The bootstrap proof
@@ -41,7 +42,7 @@ describe("the fixtures", () => {
       "find_people", "find_companies", "find_one_person", "find_one_company",
       "create_person", "create_company", "update_person", "update_company",
       "get_views", "get_view_filters", "get_object_metadata", "get_field_metadata",
-      "create_view", "create_view_filter",
+      "create_view", "create_view_filter", "create_field_metadata",
     ]) {
       expect(tools.has(t), t).toBe(true);
     }
@@ -156,8 +157,11 @@ describe("the readers read the recorded answers", () => {
     expect(contract.readListSlug(filters, "another-field")).toBeNull();
   });
 
-  it("create_view / create_view_filter: the bare created object with its id", () => {
+  it("create_view / create_view_filter / create_field_metadata: the bare created object with its id", () => {
     expect(contract.readCreatedEntity("create_view", fixture("create_view").answer).id).toBe("<uuid>");
+    expect(contract.readCreatedEntity("create_field_metadata", fixture("create_field_metadata").answer)).toEqual({
+      id: "<uuid>", name: "cinatraObjectId", type: "TEXT",
+    });
     const f = contract.readCreatedEntity("create_view_filter", fixture("create_view_filter").answer);
     expect(f.operand).toBe("CONTAINS");
   });
@@ -264,9 +268,10 @@ describe("the reader census: every exported reader checks what it reads against 
     view: { id: "v-1", name: "Leaders" },
     "view filter": { id: "f-1", fieldMetadataId: "fm-1", operand: "CONTAINS", value: "a-1" },
     object: { id: "o-1", nameSingular: "person" },
-    field: { id: "fd-1", name: "inLists" },
+    field: { id: "fd-1", name: "inLists", type: "ARRAY", isActive: true },
     "created view": { id: "v-1", name: "Leaders" },
     "created view filter": { id: "f-1", fieldMetadataId: "fm-1", operand: "CONTAINS" },
+    "created field": { id: "fd-2", name: "inLists", type: "ARRAY" },
   };
   const clone = (v) => structuredClone(v);
   const sample = (type) => {
@@ -561,6 +566,9 @@ describe("the builders send the recorded arguments", () => {
     expect(contract.getObjectMetadataArgs()).toEqual(fixture("get_object_metadata").args);
     expect(san(contract.getFieldMetadataArgs("11111111-2222-4333-8444-555555555555"))).toEqual(fixture("get_field_metadata.person").args);
     expect(san(contract.getViewFiltersArgs("11111111-2222-4333-8444-555555555555"))).toEqual(fixture("get_view_filters").args);
+    expect(san(contract.createFieldMetadataArgs({
+      objectMetadataId: "11111111-2222-4333-8444-555555555555", name: "cinatraObjectId", type: "TEXT",
+    }))).toEqual(fixture("create_field_metadata").args);
   });
 
   it("record writes: createContact / createAccount and the membership update send the recorded arguments", () => {
@@ -783,6 +791,20 @@ describe("the drift check", () => {
 
     const otherImage = { ...FIXTURES, image: `sha256:${"0".repeat(64)}` };
     expect(diffRecords(FIXTURES, otherImage)).toMatch(/^image: /);
+  });
+
+  it("a record holds the fixtures' create_field_metadata call only from a fresh workspace: no create, or another field's, is never written", () => {
+    expect(recordLib.freshFieldCreateRecorded(FIXTURES)).toBe(true);
+    const none = { ...FIXTURES, calls: FIXTURES.calls.filter((c) => c.id !== "create_field_metadata") };
+    expect(recordLib.freshFieldCreateRecorded(none)).toBe(false);
+    expect(diffRecords(FIXTURES, none)).toMatch(/^create_field_metadata: committed, not recorded live/);
+    const other = structuredClone(FIXTURES);
+    other.calls.find((c) => c.id === "create_field_metadata").args = contract.createFieldMetadataArgs({
+      objectMetadataId: "<uuid>", name: "apolloPersonId", type: "TEXT",
+    });
+    expect(recordLib.freshFieldCreateRecorded(other)).toBe(false);
+    expect(diffRecords(FIXTURES, other)).toMatch(/^create_field_metadata: /);
+    expect(recordLib.freshFieldCreateRecorded({ calls: [] })).toBe(false);
   });
 
   it("projects a failure by its failure keys", () => {

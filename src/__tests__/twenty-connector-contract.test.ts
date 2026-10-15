@@ -98,7 +98,7 @@ function fakeTwenty() {
     }
     if (tool === "get_field_metadata") {
       const obj = args.objectMetadataId === OBJ.person ? "person" : "company";
-      return [{ id: `fld-${obj}-name`, name: "name" }, { id: FIELD[obj], name: "inLists" }];
+      return [{ id: `fld-${obj}-name`, name: "name", type: "FULL_NAME" }, { id: FIELD[obj], name: "inLists", type: "ARRAY" }];
     }
     if (tool === "get_views") {
       const objId = args.objectNameSingular ? OBJ[args.objectNameSingular] : null;

@@ -29,7 +29,9 @@
 // read — and the sanitized arguments, so a value that changes between runs
 // (a count, a position, a name) is no drift while a changed shape is.
 
-import { readAnswer, readEntries, readToolOutput, TOOL_ANSWERS } from "../../../src/twenty-tool-contract.mjs";
+import {
+  CONNECTOR_CUSTOM_FIELDS, readAnswer, readEntries, readToolOutput, TOOL_ANSWERS,
+} from "../../../src/twenty-tool-contract.mjs";
 
 const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const ISO_TIME_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
@@ -47,11 +49,12 @@ export const CONTRACT_PATHS = Object.freeze({
   update_person: ["success", "result", "result.id"],
   update_company: ["success", "result", "result.id"],
   get_object_metadata: ["[0].id", "[0].nameSingular"],
-  get_field_metadata: ["[0].id", "[0].name"],
+  get_field_metadata: ["[0].id", "[0].name", "[0].type"],
   get_views: ["[0].id", "[0].name", "[0].objectMetadataId"],
   get_view_filters: ["[0].id", "[0].fieldMetadataId", "[0].operand", "[0].value"],
   create_view: ["id", "name"],
   create_view_filter: ["id", "fieldMetadataId", "operand", "value"],
+  create_field_metadata: ["id", "name", "type"],
 });
 
 /** The paths read for a failed call, whatever the tool. */
@@ -153,6 +156,20 @@ export function diffRecords(committed, live) {
     if (!a.calls[id]) lines.push(`${id}: recorded live, not committed`);
   }
   return lines.length ? lines.join("\n") : null;
+}
+
+/**
+ * True when a live record holds the create_field_metadata call the committed
+ * fixtures pin: the connector's first custom field (CONNECTOR_CUSTOM_FIELDS[0])
+ * created, as on a fresh workspace. A workspace that already had that field
+ * records no create, or another field's create, so such a record explains its
+ * drift and is never written over the fixtures.
+ */
+export function freshFieldCreateRecorded(record) {
+  const [first] = CONNECTOR_CUSTOM_FIELDS;
+  return (record?.calls ?? []).some(
+    (c) => c.id === "create_field_metadata" && c.args?.name === first.name && c.args?.type === first.type,
+  );
 }
 
 function isPlainObject(value) {
