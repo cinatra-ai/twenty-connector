@@ -2,10 +2,27 @@ import "server-only";
 
 // Twenty CRM provider implementation for the provider-agnostic CrmConnector
 // facade. Maps cinatra-shape verbs to Twenty's catalog tools via the
-// dispatcher `execute_tool` MCP call. The catalog tools take TOP-LEVEL
-// arguments (`{ name, cinatraObjectId, ... }`), not args wrapped in an
-// `input` field — this mirrors the bootstrap-proof contract validated
-// end-to-end against the local Twenty stack.
+// dispatcher `execute_tool` MCP call.
+//
+// Every argument this file sends and every answer it reads goes through the
+// shared tool contract (src/twenty-tool-contract.mjs), which the bootstrap
+// proof runs against a live Twenty on every change: find tools take their
+// filters at the TOP level beside `limit`/`offset` (at most 100 records a
+// call, so long reads page), record answers are `{ success, result }`, view
+// and metadata answers are bare, writes answer `result: { id }` only, and a
+// `{ success: false }` answer throws (readToolOutput). Every entry of an answer
+// (a record, a view, a view filter, an object, a field) is read through the
+// contract's one entry validator, so a malformed entry throws a TwentyMcpError
+// and never reads as an absent list or an empty record.
+//
+// Lists: a list is a person or company view that carries the filter
+// `inLists CONTAINS <slug>`; its slug is read back from that filter. A record
+// is a member when its `inLists` array holds the slug. A view without that
+// filter is not a list, so views that already existed in the CRM have no
+// members until records are tagged. A list is found among the first 100 views
+// of its object (get_views answers at most 100 and has no offset); when an
+// answer holds 100 views, a read that needs every view fails closed with an
+// error naming that ceiling instead of answering a shorter list.
 //
 // All upstream calls go through `executeTwentyMcpTool` which resolves the
 // live Twenty row from the external MCP registry and attaches the bearer
@@ -19,12 +36,48 @@ import type {
   CrmListMembership,
 } from "@cinatra-ai/sdk-extensions";
 
-import { executeTwentyMcpTool, readJsonContent, TwentyMcpError } from "./twenty-mcp-call";
+import { executeTwentyMcpTool, readToolOutput, twentyMcpError, TwentyMcpError } from "./twenty-mcp-call";
+import {
+  OBJECTS,
+  LIST_FIELD,
+  VIEWS_LIMIT,
+  companySearchFilter,
+  createListFilterArgs,
+  createRecordArgs,
+  createViewArgs,
+  emailFilter,
+  findArgs,
+  findOneArgs,
+  getFieldMetadataArgs,
+  getObjectMetadataArgs,
+  getViewFiltersArgs,
+  getViewsArgs,
+  isSlug,
+  membershipFilter,
+  membershipUpdateArgs,
+  personSearchFilter,
+  readAllPages,
+  readArrayAnswer,
+  readCreatedEntity,
+  readFindOne,
+  readFindPage,
+  readListFieldId,
+  readListSlug,
+  readListSlugs,
+  readObjectIds,
+  readWrittenId,
+  slugify,
+  slugsOf,
+  slugsWith,
+  slugsWithout,
+  updateRecordArgs,
+  viewsAtCeiling,
+  type FindPage,
+  type RecordType,
+} from "./twenty-tool-contract.mjs";
 
 // ---------------------------------------------------------------------------
-// Twenty raw shapes (subset of fields cinatra reads). The full record shape
-// returned by Twenty's CRUD tools wraps records under a record-type key
-// (`person`, `company`, `view`) at the top level of the response payload.
+// Twenty raw shapes (subset of fields cinatra reads).
 // ---------------------------------------------------------------------------
 
 type TwentyName = { firstName?: string; lastName?: string };
@@ -69,17 +122,6 @@ function combineName(name: TwentyName | undefined): string {
   return [name.firstName, name.lastName].filter(Boolean).join(" ").trim();
 }
 
-function splitName(full: string): TwentyName {
-  const trimmed = full.trim();
-  if (!trimmed) return {};
-  const idx = trimmed.indexOf(" ");
-  if (idx < 0) return { firstName: trimmed };
-  return {
-    firstName: trimmed.slice(0, idx),
-    lastName: trimmed.slice(idx + 1).trim(),
-  };
-}
-
 function mapPersonToContact(p: TwentyPerson): CrmContact {
   return {
     id: p.id,
@@ -88,7 +130,7 @@ function mapPersonToContact(p: TwentyPerson): CrmContact {
     email: p.emails?.primaryEmail ?? null,
     title: p.jobTitle ?? null,
     accountId: p.companyId ?? null,
-    inLists: p.inLists ?? [],
+    inLists: slugsOf(p),
     apolloPersonId: p.apolloPersonId ?? null,
     enrichmentStatus: p.enrichmentStatus ?? null,
     linkedinUrl: p.linkedinLink?.primaryLinkUrl ?? null,
@@ -106,38 +148,89 @@ function mapCompanyToAccount(c: TwentyCompany): CrmAccount {
     cinatraObjectId: c.cinatraObjectId ?? undefined,
     name: c.name ?? "",
     domainName: domain,
-    inLists: c.inLists ?? [],
+    inLists: slugsOf(c),
     apolloOrganizationId: c.apolloOrganizationId ?? null,
   };
 }
 
-function contactToTopLevelArgs(input: Partial<CrmContact>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  if (input.name !== undefined) out.name = splitName(input.name);
-  if (input.email !== undefined) out.emails = { primaryEmail: input.email ?? "" };
-  if (input.title !== undefined) out.jobTitle = input.title ?? "";
-  if (input.accountId !== undefined) out.companyId = input.accountId ?? null;
-  if (input.inLists !== undefined) out.inLists = input.inLists;
-  if (input.apolloPersonId !== undefined) out.apolloPersonId = input.apolloPersonId ?? "";
-  if (input.enrichmentStatus !== undefined) out.enrichmentStatus = input.enrichmentStatus ?? "";
-  if (input.linkedinUrl !== undefined) out.linkedinLink = { primaryLinkUrl: input.linkedinUrl ?? "" };
-  if (input.twitterHandle !== undefined) out.xLink = { primaryLinkUrl: input.twitterHandle ?? "" };
-  if (input.cinatraObjectId !== undefined) out.cinatraObjectId = input.cinatraObjectId ?? "";
-  return out;
+/** The contact a successful write stands for when its re-read is not available. */
+function contactFromWrite(id: string, input: Partial<CrmContact>): CrmContact {
+  return {
+    id,
+    cinatraObjectId: input.cinatraObjectId ?? undefined,
+    name: input.name ?? "",
+    email: input.email ?? null,
+    title: input.title ?? null,
+    accountId: input.accountId ?? null,
+    inLists: input.inLists ?? [],
+    apolloPersonId: input.apolloPersonId ?? null,
+    enrichmentStatus: input.enrichmentStatus ?? null,
+    linkedinUrl: input.linkedinUrl ?? null,
+    twitterHandle: input.twitterHandle ?? null,
+  };
 }
 
-function accountToTopLevelArgs(input: Partial<CrmAccount>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  if (input.name !== undefined) out.name = input.name;
-  if (input.domainName !== undefined) {
-    out.domainName = { primaryLinkUrl: input.domainName ?? "" };
+/** The account a successful write stands for when its re-read is not available. */
+function accountFromWrite(id: string, input: Partial<CrmAccount>): CrmAccount {
+  return {
+    id,
+    cinatraObjectId: input.cinatraObjectId ?? undefined,
+    name: input.name ?? "",
+    domainName: input.domainName ?? null,
+    inLists: input.inLists ?? [],
+    apolloOrganizationId: input.apolloOrganizationId ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Calls (every one through the shared contract)
+// ---------------------------------------------------------------------------
+
+async function callTool(toolName: string, args: Record<string, unknown>): Promise<unknown> {
+  const result = await executeTwentyMcpTool(toolName, args);
+  return readToolOutput(toolName, result);
+}
+
+async function findPage<R>(
+  objectType: RecordType,
+  filter: Record<string, unknown>,
+  page: { limit: number; offset: number },
+): Promise<FindPage<R>> {
+  const tool = OBJECTS[objectType].find;
+  return readFindPage<R>(tool, await callTool(tool, findArgs(filter, page)), twentyMcpError);
+}
+
+async function findAll<R>(
+  objectType: RecordType,
+  filter: Record<string, unknown>,
+  want?: number,
+): Promise<R[]> {
+  return readAllPages<R>((page) => findPage<R>(objectType, filter, page), {
+    want: want ?? Number.POSITIVE_INFINITY,
+    toolName: OBJECTS[objectType].find,
+    makeError: twentyMcpError,
+  });
+}
+
+/** One record by id: null when the answer holds zero records (Twenty answers an
+ *  unknown id so); every failed answer throws, whatever its message says. */
+async function findOne<R>(objectType: RecordType, id: string): Promise<R | null> {
+  const tool = OBJECTS[objectType].findOne;
+  return readFindOne<R>(tool, await callTool(tool, findOneArgs(id)), twentyMcpError);
+}
+
+async function writeRecord(toolName: string, args: Record<string, unknown>): Promise<string> {
+  return readWrittenId(toolName, await callTool(toolName, args), twentyMcpError);
+}
+
+/** The record after a successful write: re-read by id. A write that succeeded is
+ *  never reported as failed: when the re-read fails, the written values stand. */
+async function reRead<R>(objectType: RecordType, id: string): Promise<R | null> {
+  try {
+    return await findOne<R>(objectType, id);
+  } catch {
+    return null;
   }
-  if (input.inLists !== undefined) out.inLists = input.inLists;
-  if (input.apolloOrganizationId !== undefined) {
-    out.apolloOrganizationId = input.apolloOrganizationId ?? "";
-  }
-  if (input.cinatraObjectId !== undefined) out.cinatraObjectId = input.cinatraObjectId ?? "";
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,210 +243,135 @@ export const twentyConnector: CrmConnector = {
   // ----- Contacts (Twenty: Person) -----
 
   async searchContacts({ query, limit }): Promise<CrmContact[]> {
-    const result = await executeTwentyMcpTool("find_people", {
-      filter: query ? { searchName: query } : {},
-      limit: limit ?? 25,
-    });
-    const payload = readJsonContent<{ people?: TwentyPerson[] }>(result);
-    return (payload.people ?? []).map(mapPersonToContact);
+    const people = await findAll<TwentyPerson>("contact", personSearchFilter(query), limit ?? 25);
+    return people.map(mapPersonToContact);
   },
 
   async getContact({ id }): Promise<CrmContact | null> {
-    try {
-      const result = await executeTwentyMcpTool("find_one_person", { id });
-      const payload = readJsonContent<{ person?: TwentyPerson | null }>(result);
-      if (!payload.person) return null;
-      return mapPersonToContact(payload.person);
-    } catch (err) {
-      if (err instanceof TwentyMcpError && /not.?found/i.test(err.message)) {
-        return null;
-      }
-      throw err;
-    }
+    const person = await findOne<TwentyPerson>("contact", id);
+    return person ? mapPersonToContact(person) : null;
   },
 
   async createContact(input): Promise<CrmContact> {
-    const args = contactToTopLevelArgs(input);
-    if (!args.name) args.name = splitName(input.name ?? "");
-    const result = await executeTwentyMcpTool("create_person", args);
-    const payload = readJsonContent<{ person?: TwentyPerson }>(result);
-    if (!payload.person) {
-      throw new TwentyMcpError(-32603, "create_person returned no person");
-    }
-    return mapPersonToContact(payload.person);
+    const id = await writeRecord(OBJECTS.contact.create, createRecordArgs("contact", input));
+    const person = await reRead<TwentyPerson>("contact", id);
+    return person ? mapPersonToContact(person) : contactFromWrite(id, input);
   },
 
   async updateContact({ id, patch }): Promise<CrmContact> {
-    const result = await executeTwentyMcpTool("update_person", {
-      id,
-      ...contactToTopLevelArgs(patch),
-    });
-    const payload = readJsonContent<{ person?: TwentyPerson }>(result);
-    if (!payload.person) {
-      throw new TwentyMcpError(-32603, "update_person returned no person");
-    }
-    return mapPersonToContact(payload.person);
+    const args = updateRecordArgs("contact", id, patch);
+    if (args) await writeRecord(OBJECTS.contact.update, args);
+    const person = await reRead<TwentyPerson>("contact", id);
+    return person ? mapPersonToContact(person) : contactFromWrite(id, patch);
   },
 
   async findContactByEmail({ email }): Promise<CrmContact | null> {
-    const result = await executeTwentyMcpTool("find_people", {
-      filter: { "emails.primaryEmail": email },
-      limit: 1,
-    });
-    const payload = readJsonContent<{ people?: TwentyPerson[] }>(result);
-    const first = payload.people?.[0];
+    const { records } = await findPage<TwentyPerson>("contact", emailFilter(email), { limit: 1, offset: 0 });
+    const first = records[0];
     return first ? mapPersonToContact(first) : null;
   },
 
   // ----- Accounts (Twenty: Company) -----
 
   async searchAccounts({ query, limit }): Promise<CrmAccount[]> {
-    const result = await executeTwentyMcpTool("find_companies", {
-      filter: query ? { searchName: query } : {},
-      limit: limit ?? 25,
-    });
-    const payload = readJsonContent<{ companies?: TwentyCompany[] }>(result);
-    return (payload.companies ?? []).map(mapCompanyToAccount);
+    const companies = await findAll<TwentyCompany>("account", companySearchFilter(query), limit ?? 25);
+    return companies.map(mapCompanyToAccount);
   },
 
   async getAccount({ id }): Promise<CrmAccount | null> {
-    try {
-      const result = await executeTwentyMcpTool("find_one_company", { id });
-      const payload = readJsonContent<{ company?: TwentyCompany | null }>(result);
-      if (!payload.company) return null;
-      return mapCompanyToAccount(payload.company);
-    } catch (err) {
-      if (err instanceof TwentyMcpError && /not.?found/i.test(err.message)) {
-        return null;
-      }
-      throw err;
-    }
+    const company = await findOne<TwentyCompany>("account", id);
+    return company ? mapCompanyToAccount(company) : null;
   },
 
   async createAccount(input): Promise<CrmAccount> {
-    const args = accountToTopLevelArgs(input);
-    if (!args.name) args.name = input.name;
-    const result = await executeTwentyMcpTool("create_company", args);
-    const payload = readJsonContent<{ company?: TwentyCompany }>(result);
-    if (!payload.company) {
-      throw new TwentyMcpError(-32603, "create_company returned no company");
-    }
-    return mapCompanyToAccount(payload.company);
+    const id = await writeRecord(OBJECTS.account.create, createRecordArgs("account", input));
+    const company = await reRead<TwentyCompany>("account", id);
+    return company ? mapCompanyToAccount(company) : accountFromWrite(id, input);
   },
 
   async updateAccount({ id, patch }): Promise<CrmAccount> {
-    const result = await executeTwentyMcpTool("update_company", {
-      id,
-      ...accountToTopLevelArgs(patch),
-    });
-    const payload = readJsonContent<{ company?: TwentyCompany }>(result);
-    if (!payload.company) {
-      throw new TwentyMcpError(-32603, "update_company returned no company");
-    }
-    return mapCompanyToAccount(payload.company);
+    const args = updateRecordArgs("account", id, patch);
+    if (args) await writeRecord(OBJECTS.account.update, args);
+    const company = await reRead<TwentyCompany>("account", id);
+    return company ? mapCompanyToAccount(company) : accountFromWrite(id, patch);
   },
 
-  // ----- Lists (Twenty: View filtered on `inLists`) -----
+  // ----- Lists (Twenty: a view filtered on `inLists CONTAINS <slug>`) -----
 
   async searchLists({ query, objectType }): Promise<CrmList[]> {
-    // Twenty's catalog has `get_views` (not `find_views`/`find_one_view`).
-    // The tool returns all views in the workspace; we post-filter by name
-    // substring and by objectType (when the per-type object-metadata-id
-    // cache has been populated by ensureObjectMetadataLoaded).
-    let wantedMetadataId: string | null = null;
-    if (objectType) {
-      await ensureObjectMetadataLoaded();
-      wantedMetadataId = viewObjectMetadataIdFor(objectType);
-      if (wantedMetadataId === null) {
-        // Caller asked for a per-type filter but metadata could not be loaded.
-        // Fail-closed before issuing the get_views call.
-        throw new TwentyMcpError(
-          -32603,
-          `cannot filter views by objectType="${objectType}" — Twenty object metadata not available`,
-        );
+    const lowered = (query ?? "").trim().toLowerCase();
+    const types: RecordType[] = objectType ? [objectType] : ["contact", "account"];
+    const out: CrmList[] = [];
+    for (const type of types) {
+      // Fail closed before reading views: the list field's id comes from the object metadata
+      // (listFieldId throws when the metadata names no person and company objects); a type whose
+      // `inLists` field is not provisioned has no lists.
+      if (!(await listFieldId(type))) continue;
+      const views = await readViews(type);
+      if (viewsAtCeiling(views)) throw viewsCeilingError(type);
+      for (const view of views) {
+        if (lowered && !(view.name ?? "").toLowerCase().includes(lowered)) continue;
+        const list = await listOf(view, type);
+        if (list) out.push(list);
       }
     }
-    const result = await executeTwentyMcpTool("get_views", {});
-    const payload = readJsonContent<{ views?: TwentyView[] }>(result);
-    const all = payload.views ?? [];
-    const lowered = (query ?? "").trim().toLowerCase();
-    return all
-      .filter((v) => {
-        if (lowered && !(v.name ?? "").toLowerCase().includes(lowered)) return false;
-        if (wantedMetadataId && v.objectMetadataId !== wantedMetadataId) return false;
-        return true;
-      })
-      .map(mapViewToList);
+    return out;
   },
 
   async getList({ id }): Promise<CrmList | null> {
-    // No `find_one_view` in the catalog — list all and pick the matching id.
-    const result = await executeTwentyMcpTool("get_views", {});
-    const payload = readJsonContent<{ views?: TwentyView[] }>(result);
-    const v = (payload.views ?? []).find((view) => view.id === id);
-    return v ? mapViewToList(v) : null;
+    let atCeiling: RecordType | null = null;
+    for (const type of ["contact", "account"] as const) {
+      const views = await readViews(type);
+      const view = views.find((v) => v.id === id);
+      if (view) return listOf(view, type);
+      if (!atCeiling && viewsAtCeiling(views)) atCeiling = type;
+    }
+    // Not found: when an object's answer held the ceiling, the list may be a view
+    // get_views left out, so the miss is no answer.
+    if (atCeiling) throw viewsCeilingError(atCeiling);
+    return null;
   },
 
   async createList(input): Promise<CrmList> {
     const slug = input.slug || slugify(input.name);
-    await ensureObjectMetadataLoaded();
-    const metadataId = viewObjectMetadataIdFor(input.objectType);
-    if (metadataId === null) {
+    if (!isSlug(slug)) {
+      throw new TwentyMcpError(-32602, `cannot derive a list slug from "${input.name}"`);
+    }
+    const fieldId = await listFieldId(input.objectType);
+    if (!fieldId) {
       throw new TwentyMcpError(
         -32603,
-        `cannot create view for objectType="${input.objectType}" — Twenty object metadata not available (the view target object is required)`,
+        `cannot create a list of ${OBJECTS[input.objectType].nameSingular} records — the "${LIST_FIELD}" field is not provisioned in Twenty`,
       );
     }
-    const createResult = await executeTwentyMcpTool("create_view", {
-      name: input.name,
-      objectMetadataId: metadataId,
-      type: "table",
-    });
-    const payload = readJsonContent<{ view?: TwentyView }>(createResult);
-    if (!payload.view) {
-      throw new TwentyMcpError(-32603, "create_view returned no view");
+    const existing = await this.searchLists({ query: "", objectType: input.objectType });
+    if (existing.some((l) => l.slug === slug)) {
+      throw new TwentyMcpError(-32602, `a list with slug "${slug}" already exists`);
     }
-    // Attach the `inLists CONTAINS <slug>` filter to the new view. The
-    // catalog tool for adding a NEW filter is `create_view_filter`. Best-
-    // effort: if Twenty's filter API doesn't accept this exact shape for a
-    // given workspace, the list still functions via direct `inLists`
-    // membership ops below.
-    await executeTwentyMcpTool("create_view_filter", {
-      viewId: payload.view.id,
-      fieldName: "inLists",
-      operand: "contains",
-      value: slug,
-    }).catch(() => {
-      // Swallow — direct membership patches in addListMember keep working.
-    });
-    // Override mapViewToList's inferred objectType with the caller's
-    // explicit input — guarantees the caller sees what they asked for.
-    return { ...mapViewToList(payload.view), slug, objectType: input.objectType };
+    const view = readCreatedEntity<TwentyView>(
+      "create_view",
+      await callTool("create_view", createViewArgs({ name: input.name, objectType: input.objectType })),
+      twentyMcpError,
+    );
+    readCreatedEntity(
+      "create_view_filter",
+      await callTool("create_view_filter", createListFilterArgs({ viewId: view.id, fieldMetadataId: fieldId, slug })),
+      twentyMcpError,
+    );
+    return { id: view.id, slug, name: view.name ?? input.name, objectType: input.objectType };
   },
 
   async getListMembers({ listId, limit }): Promise<{
     contactIds: string[];
     accountIds: string[];
   }> {
-    // Ensure metadata is loaded so list.objectType is accurate before
-    // dispatching to find_people vs find_companies.
-    await ensureObjectMetadataLoaded();
     const list = await this.getList({ id: listId });
     if (!list) return { contactIds: [], accountIds: [] };
-    if (list.objectType === "contact") {
-      const result = await executeTwentyMcpTool("find_people", {
-        filter: { inLists: { contains: list.slug } },
-        limit: limit ?? 1000,
-      });
-      const payload = readJsonContent<{ people?: TwentyPerson[] }>(result);
-      return { contactIds: (payload.people ?? []).map((p) => p.id), accountIds: [] };
-    }
-    const result = await executeTwentyMcpTool("find_companies", {
-      filter: { inLists: { contains: list.slug } },
-      limit: limit ?? 1000,
-    });
-    const payload = readJsonContent<{ companies?: TwentyCompany[] }>(result);
-    return { contactIds: [], accountIds: (payload.companies ?? []).map((c) => c.id) };
+    const records = await findAll<{ id: string }>(list.objectType, membershipFilter(list.slug), limit);
+    const ids = records.map((r) => r.id);
+    return list.objectType === "contact"
+      ? { contactIds: ids, accountIds: [] }
+      : { contactIds: [], accountIds: ids };
   },
 
   async addListMember({ listId, objectId, objectType }: CrmListMembership): Promise<void> {
@@ -361,123 +379,104 @@ export const twentyConnector: CrmConnector = {
     if (!list) {
       throw new TwentyMcpError(-32602, `list ${listId} not found`);
     }
-    const current = await readMembershipInLists(objectId, objectType);
-    if (current.includes(list.slug)) return;
-    const next = [...current, list.slug];
-    await patchMembershipInLists(objectId, objectType, next);
+    if (list.objectType !== objectType) {
+      throw new TwentyMcpError(-32602, `list ${listId} holds ${list.objectType} records, not ${objectType} records`);
+    }
+    const record = await findOne<Record<string, unknown>>(objectType, objectId);
+    if (!record) {
+      throw new TwentyMcpError(-32602, `${objectType} ${objectId} not found`);
+    }
+    const next = slugsWith(readListSlugs(OBJECTS[objectType].findOne, record, twentyMcpError), list.slug);
+    if (!next) return;
+    await writeRecord(OBJECTS[objectType].update, membershipUpdateArgs(objectId, next));
   },
 
   async removeListMember({ listId, objectId, objectType }: CrmListMembership): Promise<void> {
     const list = await this.getList({ id: listId });
     if (!list) return;
-    const current = await readMembershipInLists(objectId, objectType);
-    if (!current.includes(list.slug)) return;
-    const next = current.filter((s) => s !== list.slug);
-    await patchMembershipInLists(objectId, objectType, next);
+    if (list.objectType !== objectType) {
+      throw new TwentyMcpError(-32602, `list ${listId} holds ${list.objectType} records, not ${objectType} records`);
+    }
+    const record = await findOne<Record<string, unknown>>(objectType, objectId);
+    if (!record) return;
+    const next = slugsWithout(readListSlugs(OBJECTS[objectType].findOne, record, twentyMcpError), list.slug);
+    if (!next) return;
+    await writeRecord(OBJECTS[objectType].update, membershipUpdateArgs(objectId, next));
   },
 };
 
 // ---------------------------------------------------------------------------
-// List/membership helpers
+// List helpers
 // ---------------------------------------------------------------------------
 
-function mapViewToList(v: TwentyView): CrmList {
-  return {
-    id: v.id,
-    slug: slugify(v.name ?? v.id),
-    name: v.name ?? v.id,
-    objectType: viewObjectTypeFor(v.objectMetadataId),
-  };
+/** The error of a read that needs every view of an object when get_views answered its ceiling. */
+function viewsCeilingError(objectType: RecordType): TwentyMcpError {
+  return new TwentyMcpError(
+    -32603,
+    `get_views answered ${VIEWS_LIMIT} ${OBJECTS[objectType].nameSingular} views, the ceiling of Twenty's get_views (it has no offset): ` +
+      "views past it cannot be read, so lists cannot be read completely",
+  );
 }
 
-function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+async function readViews(objectType: RecordType): Promise<TwentyView[]> {
+  return readArrayAnswer<TwentyView>(
+    "get_views",
+    await callTool("get_views", getViewsArgs(objectType)),
+    twentyMcpError,
+  );
 }
 
-// Per-type object-metadata-id cache. Lazily populated by
-// `ensureObjectMetadataLoaded` on first use; can also be pre-populated by
-// `_setObjectMetadataIds` (autoSetup or tests). When unset, callers that
-// require per-type semantics fail-closed with a clear error.
-let cachedObjectMetadataIds: { contact: string; account: string } | null = null;
-let metadataLoadInflight: Promise<void> | null = null;
+/** The list a view is, or null when the view carries no `inLists CONTAINS` filter. */
+async function listOf(view: TwentyView, objectType: RecordType): Promise<CrmList | null> {
+  const fieldId = await listFieldId(objectType);
+  if (!fieldId) return null;
+  const filters = readArrayAnswer(
+    "get_view_filters",
+    await callTool("get_view_filters", getViewFiltersArgs(view.id)),
+    twentyMcpError,
+  );
+  const slug = readListSlug(filters, fieldId, twentyMcpError);
+  if (!slug) return null;
+  return { id: view.id, slug, name: view.name ?? view.id, objectType };
+}
 
-/** Lazily fetch + cache the Person/Company object metadata ids from Twenty.
- *  Idempotent: short-circuits when the cache is already populated;
- *  deduplicates concurrent callers via an in-flight promise. Soft-fails on
- *  upstream errors (cache stays null; callers detect + degrade). */
-async function ensureObjectMetadataLoaded(): Promise<void> {
-  if (cachedObjectMetadataIds !== null) return;
-  if (metadataLoadInflight) {
-    await metadataLoadInflight;
-    return;
-  }
-  metadataLoadInflight = (async () => {
-    try {
-      const result = await executeTwentyMcpTool("get_object_metadata", {});
-      const payload = readJsonContent<{
-        objectMetadata?: Array<{ id: string; nameSingular?: string }>;
-        objects?: Array<{ id: string; nameSingular?: string }>;
-      }>(result);
-      const rows = payload.objectMetadata ?? payload.objects ?? [];
-      const person = rows.find((r) => r.nameSingular === "person");
-      const company = rows.find((r) => r.nameSingular === "company");
-      if (person && company) {
-        cachedObjectMetadataIds = { contact: person.id, account: company.id };
-      }
-    } catch {
-      // Cache stays null — callers that need per-type semantics will throw
-      // with a clear error; callers that don't continue with degraded
-      // behavior.
-    } finally {
-      metadataLoadInflight = null;
+// The `inLists` field id of each object, read once per process from
+// get_object_metadata and get_field_metadata. A missing field is not cached,
+// so a field provisioned later is found on the next call.
+const listFieldIds: Partial<Record<RecordType, string>> = {};
+let objectIds: { contact: string; account: string } | null = null;
+
+async function listFieldId(objectType: RecordType): Promise<string | null> {
+  const cached = listFieldIds[objectType];
+  if (cached) return cached;
+  if (!objectIds) {
+    objectIds = readObjectIds(
+      readArrayAnswer(
+        "get_object_metadata",
+        await callTool("get_object_metadata", getObjectMetadataArgs()),
+        twentyMcpError,
+      ),
+      twentyMcpError,
+    );
+    if (!objectIds) {
+      throw new TwentyMcpError(-32603, "Twenty object metadata names no person and company objects");
     }
-  })();
-  await metadataLoadInflight;
-}
-
-function viewObjectMetadataIdFor(objectType: "contact" | "account"): string | null {
-  if (!cachedObjectMetadataIds) return null;
-  return objectType === "contact"
-    ? cachedObjectMetadataIds.contact
-    : cachedObjectMetadataIds.account;
-}
-
-function viewObjectTypeFor(objectMetadataId: string | undefined): "contact" | "account" {
-  if (!objectMetadataId || !cachedObjectMetadataIds) return "contact";
-  return objectMetadataId === cachedObjectMetadataIds.account ? "account" : "contact";
-}
-
-/** Populate the per-type object-metadata-id cache after autoSetupLocalTwenty
- *  resolves them from Twenty. Also used by unit tests. Pass null to reset. */
-export function _setObjectMetadataIds(ids: {
-  contact: string;
-  account: string;
-} | null): void {
-  cachedObjectMetadataIds = ids;
-}
-
-async function readMembershipInLists(
-  objectId: string,
-  objectType: "contact" | "account",
-): Promise<string[]> {
-  if (objectType === "contact") {
-    const result = await executeTwentyMcpTool("find_one_person", { id: objectId });
-    const payload = readJsonContent<{ person?: TwentyPerson | null }>(result);
-    return payload.person?.inLists ?? [];
   }
-  const result = await executeTwentyMcpTool("find_one_company", { id: objectId });
-  const payload = readJsonContent<{ company?: TwentyCompany | null }>(result);
-  return payload.company?.inLists ?? [];
+  const fieldId = readListFieldId(
+    readArrayAnswer(
+      "get_field_metadata",
+      await callTool("get_field_metadata", getFieldMetadataArgs(objectIds[objectType])),
+      twentyMcpError,
+    ),
+    twentyMcpError,
+  );
+  if (fieldId) listFieldIds[objectType] = fieldId;
+  return fieldId;
 }
 
-async function patchMembershipInLists(
-  objectId: string,
-  objectType: "contact" | "account",
-  inLists: string[],
-): Promise<void> {
-  if (objectType === "contact") {
-    await executeTwentyMcpTool("update_person", { id: objectId, inLists });
-    return;
-  }
-  await executeTwentyMcpTool("update_company", { id: objectId, inLists });
+/** Forget the cached object and field ids (tests). */
+export function _resetTwentyListCache(): void {
+  objectIds = null;
+  delete listFieldIds.contact;
+  delete listFieldIds.account;
 }
