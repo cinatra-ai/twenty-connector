@@ -11,7 +11,9 @@
 #
 # Container names mirror `docker-compose.yml` (cinatra-twenty-{db,redis,worker}-1
 # plus cinatra-twenty-1 for the server — its container_name is not the
-# default `cinatra-twenty-server-1`, by design).
+# default `cinatra-twenty-server-1`, by design). A stack run beside another one
+# on the same docker host names its own prefix in TWENTY_CONTAINER_PREFIX (the
+# bootstrap proof reads the same variable).
 #
 # Loud-fail diagnostics on timeout: compose ps + tail of server + worker logs.
 
@@ -19,14 +21,15 @@ set -u
 
 SERVER_URL="${TWENTY_SERVER_URL:-http://localhost:3300}"
 TIMEOUT_SECS="${TIMEOUT_SECS:-300}"
+PREFIX="${TWENTY_CONTAINER_PREFIX:-cinatra-twenty}"
 INTERVAL=3
 
 # service-name => container-name (mirrors docker-compose container_name fields)
 declare -A CONTAINER_OF=(
-  [twenty-db]="cinatra-twenty-db-1"
-  [twenty-redis]="cinatra-twenty-redis-1"
-  [twenty-server]="cinatra-twenty-1"
-  [twenty-worker]="cinatra-twenty-worker-1"
+  [twenty-db]="${PREFIX}-db-1"
+  [twenty-redis]="${PREFIX}-redis-1"
+  [twenty-server]="${PREFIX}-1"
+  [twenty-worker]="${PREFIX}-worker-1"
 )
 
 HEALTHCHECK_SERVICES=(twenty-db twenty-redis twenty-server)
@@ -79,13 +82,13 @@ for svc in twenty-db twenty-redis twenty-server twenty-worker; do
   docker inspect --format '  Running={{.State.Running}} Health={{.State.Health.Status}} ExitCode={{.State.ExitCode}}' "$c" 2>&1 || true
 done
 echo "----- twenty-db logs (tail 60) -----"
-docker logs --tail 60 cinatra-twenty-db-1 2>&1 | tail -n 60 || true
+docker logs --tail 60 "${PREFIX}-db-1" 2>&1 | tail -n 60 || true
 echo "----- twenty-redis logs (tail 40) -----"
-docker logs --tail 40 cinatra-twenty-redis-1 2>&1 | tail -n 40 || true
+docker logs --tail 40 "${PREFIX}-redis-1" 2>&1 | tail -n 40 || true
 echo "----- twenty-server logs (tail 120) -----"
-docker logs --tail 120 cinatra-twenty-1 2>&1 | tail -n 120 || true
+docker logs --tail 120 "${PREFIX}-1" 2>&1 | tail -n 120 || true
 echo "----- twenty-worker logs (tail 80) -----"
-docker logs --tail 80 cinatra-twenty-worker-1 2>&1 | tail -n 80 || true
+docker logs --tail 80 "${PREFIX}-worker-1" 2>&1 | tail -n 80 || true
 echo "----- HTTP probe to ${SERVER_URL}/healthz -----"
 curl -sS -o - -w "\nHTTP=%{http_code} CONNECT=%{time_connect}s TOTAL=%{time_total}s\n" "${SERVER_URL}/healthz" 2>&1 || true
 exit 1

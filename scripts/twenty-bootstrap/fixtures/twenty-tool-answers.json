@@ -1,0 +1,606 @@
+{
+  "calls": [
+    {
+      "answer": [
+        {
+          "applicationId": "<string>",
+          "createdAt": "<string>",
+          "description": "<string>",
+          "duplicateCriteria": "<array>",
+          "icon": "<string>",
+          "id": "<uuid>",
+          "imageIdentifierFieldMetadataId": "<null>",
+          "isActive": "<boolean>",
+          "isCustom": "<boolean>",
+          "isLabelSyncedWithName": "<boolean>",
+          "isRemote": "<boolean>",
+          "isSearchable": "<boolean>",
+          "isSystem": "<boolean>",
+          "isUIReadOnly": "<boolean>",
+          "labelIdentifierFieldMetadataId": "<string>",
+          "labelPlural": "<string>",
+          "labelSingular": "<string>",
+          "namePlural": "<string>",
+          "nameSingular": "company",
+          "shortcut": "<string>",
+          "universalIdentifier": "<string>",
+          "updatedAt": "<string>",
+          "workspaceId": "<string>"
+        },
+        {
+          "applicationId": "<string>",
+          "createdAt": "<string>",
+          "description": "<string>",
+          "duplicateCriteria": "<array>",
+          "icon": "<string>",
+          "id": "<uuid>",
+          "imageIdentifierFieldMetadataId": "<string>",
+          "isActive": "<boolean>",
+          "isCustom": "<boolean>",
+          "isLabelSyncedWithName": "<boolean>",
+          "isRemote": "<boolean>",
+          "isSearchable": "<boolean>",
+          "isSystem": "<boolean>",
+          "isUIReadOnly": "<boolean>",
+          "labelIdentifierFieldMetadataId": "<string>",
+          "labelPlural": "<string>",
+          "labelSingular": "<string>",
+          "namePlural": "<string>",
+          "nameSingular": "person",
+          "shortcut": "<string>",
+          "universalIdentifier": "<string>",
+          "updatedAt": "<string>",
+          "workspaceId": "<string>"
+        }
+      ],
+      "args": {
+        "limit": 100
+      },
+      "id": "get_object_metadata",
+      "tool": "get_object_metadata"
+    },
+    {
+      "answer": [
+        {
+          "applicationId": "<string>",
+          "createdAt": "<string>",
+          "defaultValue": "<null>",
+          "description": "<null>",
+          "icon": "<null>",
+          "id": "<uuid>",
+          "isActive": "<boolean>",
+          "isCustom": "<boolean>",
+          "isLabelSyncedWithName": "<boolean>",
+          "isNullable": "<boolean>",
+          "isSystem": "<boolean>",
+          "isUIReadOnly": "<boolean>",
+          "isUnique": "<boolean>",
+          "label": "<string>",
+          "morphId": "<null>",
+          "name": "inLists",
+          "objectMetadataId": "<string>",
+          "options": "<null>",
+          "relationTargetFieldMetadataId": "<null>",
+          "relationTargetObjectMetadataId": "<null>",
+          "settings": "<null>",
+          "standardOverrides": "<null>",
+          "type": "<string>",
+          "universalIdentifier": "<string>",
+          "updatedAt": "<string>",
+          "workspaceId": "<string>"
+        }
+      ],
+      "args": {
+        "limit": 100,
+        "objectMetadataId": "<uuid>"
+      },
+      "id": "get_field_metadata.person",
+      "tool": "get_field_metadata"
+    },
+    {
+      "answer": [
+        {
+          "applicationId": "<string>",
+          "createdAt": "<string>",
+          "defaultValue": "<null>",
+          "description": "<null>",
+          "icon": "<null>",
+          "id": "<uuid>",
+          "isActive": "<boolean>",
+          "isCustom": "<boolean>",
+          "isLabelSyncedWithName": "<boolean>",
+          "isNullable": "<boolean>",
+          "isSystem": "<boolean>",
+          "isUIReadOnly": "<boolean>",
+          "isUnique": "<boolean>",
+          "label": "<string>",
+          "morphId": "<null>",
+          "name": "inLists",
+          "objectMetadataId": "<string>",
+          "options": "<null>",
+          "relationTargetFieldMetadataId": "<null>",
+          "relationTargetObjectMetadataId": "<null>",
+          "settings": "<null>",
+          "standardOverrides": "<null>",
+          "type": "<string>",
+          "universalIdentifier": "<string>",
+          "updatedAt": "<string>",
+          "workspaceId": "<string>"
+        }
+      ],
+      "args": {
+        "limit": 100,
+        "objectMetadataId": "<uuid>"
+      },
+      "id": "get_field_metadata.company",
+      "tool": "get_field_metadata"
+    },
+    {
+      "answer": {
+        "message": "<string>",
+        "recordReferences": "<array>",
+        "result": {
+          "id": "<uuid>"
+        },
+        "success": true
+      },
+      "args": {
+        "cinatraObjectId": "proof-list-<ns>-0",
+        "inLists": [
+          "cinatra-proof-list-<ns>"
+        ],
+        "name": {
+          "firstName": "proof-in",
+          "lastName": "p-0-<ns>"
+        }
+      },
+      "id": "create_person",
+      "tool": "create_person"
+    },
+    {
+      "answer": {
+        "message": "<string>",
+        "recordReferences": "<array>",
+        "result": {
+          "id": "<uuid>"
+        },
+        "success": true
+      },
+      "args": {
+        "cinatraObjectId": "proof-list-co-<ns>",
+        "inLists": [
+          "cinatra-proof-list-<ns>"
+        ],
+        "name": "cinatra-proof-co-<ns>"
+      },
+      "id": "create_company",
+      "tool": "create_company"
+    },
+    {
+      "answer": {
+        "message": "<string>",
+        "recordReferences": "<array>",
+        "result": {
+          "count": 1,
+          "records": [
+            {
+              "apolloPersonId": "",
+              "avatarFile": "<null>",
+              "avatarUrl": "<string>",
+              "cinatraObjectId": "proof-list-<ns>-0",
+              "city": "<string>",
+              "companyId": null,
+              "createdAt": "<string>",
+              "createdBy": "<object>",
+              "deletedAt": "<null>",
+              "emails": {
+                "additionalEmails": "<array>",
+                "primaryEmail": ""
+              },
+              "enrichmentStatus": "",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>"
+              ],
+              "jobTitle": "",
+              "linkedinLink": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              },
+              "linkedinUrl": "<object>",
+              "name": {
+                "firstName": "proof-in",
+                "lastName": "p-0-<ns>"
+              },
+              "phones": "<object>",
+              "position": "<number>",
+              "searchVector": "<string>",
+              "twitterHandle": "<string>",
+              "updatedAt": "<string>",
+              "updatedBy": "<object>",
+              "xLink": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              }
+            }
+          ]
+        },
+        "success": true
+      },
+      "args": {
+        "id": "<uuid>"
+      },
+      "id": "find_one_person",
+      "tool": "find_one_person"
+    },
+    {
+      "answer": {
+        "message": "<string>",
+        "recordReferences": "<array>",
+        "result": {
+          "id": "<uuid>"
+        },
+        "success": true
+      },
+      "args": {
+        "id": "<uuid>",
+        "inLists": [
+          "cinatra-proof-list-<ns>",
+          "cinatra-proof-other-<ns>"
+        ]
+      },
+      "id": "update_person",
+      "tool": "update_person"
+    },
+    {
+      "answer": {
+        "message": "<string>",
+        "recordReferences": "<array>",
+        "result": {
+          "count": 1,
+          "records": [
+            {
+              "accountOwnerId": "<null>",
+              "address": "<object>",
+              "annualRecurringRevenue": "<object>",
+              "apolloOrganizationId": "",
+              "cinatraObjectId": "proof-list-co-<ns>",
+              "createdAt": "<string>",
+              "createdBy": "<object>",
+              "deletedAt": "<null>",
+              "domainName": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              },
+              "employees": "<null>",
+              "id": "<uuid>",
+              "idealCustomerProfile": "<boolean>",
+              "inLists": [
+                "cinatra-proof-list-<ns>"
+              ],
+              "linkedinLink": "<object>",
+              "name": "cinatra-proof-co-<ns>",
+              "position": "<number>",
+              "searchVector": "<string>",
+              "updatedAt": "<string>",
+              "updatedBy": "<object>",
+              "xLink": "<object>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "args": {
+        "id": "<uuid>"
+      },
+      "id": "find_one_company",
+      "tool": "find_one_company"
+    },
+    {
+      "answer": {
+        "message": "<string>",
+        "recordReferences": "<array>",
+        "result": {
+          "id": "<uuid>"
+        },
+        "success": true
+      },
+      "args": {
+        "id": "<uuid>",
+        "inLists": [
+          "cinatra-proof-list-<ns>",
+          "cinatra-proof-other-<ns>"
+        ]
+      },
+      "id": "update_company",
+      "tool": "update_company"
+    },
+    {
+      "answer": {
+        "icon": "<string>",
+        "id": "<uuid>",
+        "name": "cinatra-proof-list-<ns>",
+        "objectNameSingular": "<string>",
+        "type": "<string>",
+        "visibility": "<string>"
+      },
+      "args": {
+        "name": "cinatra-proof-list-<ns>",
+        "objectNameSingular": "person",
+        "type": "TABLE"
+      },
+      "id": "create_view",
+      "tool": "create_view"
+    },
+    {
+      "answer": {
+        "fieldMetadataId": "<uuid>",
+        "id": "<uuid>",
+        "operand": "CONTAINS",
+        "value": "<string>",
+        "viewId": "<string>"
+      },
+      "args": {
+        "fieldMetadataId": "<uuid>",
+        "operand": "CONTAINS",
+        "value": "cinatra-proof-list-<ns>",
+        "viewId": "<uuid>"
+      },
+      "id": "create_view_filter",
+      "tool": "create_view_filter"
+    },
+    {
+      "answer": [
+        {
+          "icon": "<string>",
+          "id": "<uuid>",
+          "name": "cinatra-proof-list-<ns>",
+          "objectMetadataId": "<string>",
+          "position": "<number>",
+          "type": "<string>",
+          "visibility": "<string>"
+        }
+      ],
+      "args": {
+        "limit": 100,
+        "objectNameSingular": "person"
+      },
+      "id": "get_views",
+      "tool": "get_views"
+    },
+    {
+      "answer": [
+        {
+          "fieldMetadataId": "<uuid>",
+          "id": "<uuid>",
+          "operand": "CONTAINS",
+          "positionInViewFilterGroup": "<null>",
+          "subFieldName": "<null>",
+          "value": "cinatra-proof-list-<ns>",
+          "viewId": "<string>"
+        }
+      ],
+      "args": {
+        "viewId": "<uuid>"
+      },
+      "id": "get_view_filters",
+      "tool": "get_view_filters"
+    },
+    {
+      "answer": {
+        "message": "<string>",
+        "recordReferences": "<array>",
+        "result": {
+          "count": 3,
+          "records": [
+            {
+              "apolloPersonId": "",
+              "avatarFile": "<null>",
+              "avatarUrl": "<string>",
+              "cinatraObjectId": "proof-list-<ns>-1",
+              "city": "<string>",
+              "companyId": null,
+              "createdAt": "<string>",
+              "createdBy": "<object>",
+              "deletedAt": "<null>",
+              "emails": {
+                "additionalEmails": "<array>",
+                "primaryEmail": ""
+              },
+              "enrichmentStatus": "",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>"
+              ],
+              "jobTitle": "",
+              "linkedinLink": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              },
+              "linkedinUrl": "<object>",
+              "name": {
+                "firstName": "proof-in",
+                "lastName": "p-1-<ns>"
+              },
+              "phones": "<object>",
+              "position": "<number>",
+              "searchVector": "<string>",
+              "twitterHandle": "<string>",
+              "updatedAt": "<string>",
+              "updatedBy": "<object>",
+              "xLink": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              }
+            },
+            {
+              "apolloPersonId": "",
+              "avatarFile": "<null>",
+              "avatarUrl": "<string>",
+              "cinatraObjectId": "proof-list-<ns>-0",
+              "city": "<string>",
+              "companyId": null,
+              "createdAt": "<string>",
+              "createdBy": "<object>",
+              "deletedAt": "<null>",
+              "emails": {
+                "additionalEmails": "<array>",
+                "primaryEmail": ""
+              },
+              "enrichmentStatus": "",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>",
+                "cinatra-proof-other-<ns>"
+              ],
+              "jobTitle": "",
+              "linkedinLink": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              },
+              "linkedinUrl": "<object>",
+              "name": {
+                "firstName": "proof-in",
+                "lastName": "p-0-<ns>"
+              },
+              "phones": "<object>",
+              "position": "<number>",
+              "searchVector": "<string>",
+              "twitterHandle": "<string>",
+              "updatedAt": "<string>",
+              "updatedBy": "<object>",
+              "xLink": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              }
+            },
+            {
+              "apolloPersonId": "",
+              "avatarFile": "<null>",
+              "avatarUrl": "<string>",
+              "cinatraObjectId": "proof-list-<ns>-2",
+              "city": "<string>",
+              "companyId": null,
+              "createdAt": "<string>",
+              "createdBy": "<object>",
+              "deletedAt": "<null>",
+              "emails": {
+                "additionalEmails": "<array>",
+                "primaryEmail": ""
+              },
+              "enrichmentStatus": "",
+              "id": "<uuid>",
+              "inLists": [
+                "cinatra-proof-list-<ns>"
+              ],
+              "jobTitle": "",
+              "linkedinLink": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              },
+              "linkedinUrl": "<object>",
+              "name": {
+                "firstName": "proof-in",
+                "lastName": "p-2-<ns>"
+              },
+              "phones": "<object>",
+              "position": "<number>",
+              "searchVector": "<string>",
+              "twitterHandle": "<string>",
+              "updatedAt": "<string>",
+              "updatedBy": "<object>",
+              "xLink": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              }
+            }
+          ]
+        },
+        "success": true
+      },
+      "args": {
+        "inLists": {
+          "containsIlike": "cinatra-proof-list-<ns>"
+        },
+        "limit": 100
+      },
+      "id": "find_people.members",
+      "tool": "find_people"
+    },
+    {
+      "answer": {
+        "message": "<string>",
+        "recordReferences": "<array>",
+        "result": {
+          "count": 1,
+          "records": [
+            {
+              "accountOwnerId": "<null>",
+              "address": "<object>",
+              "annualRecurringRevenue": "<object>",
+              "apolloOrganizationId": "",
+              "cinatraObjectId": "proof-list-co-<ns>",
+              "createdAt": "<string>",
+              "createdBy": "<object>",
+              "deletedAt": "<null>",
+              "domainName": {
+                "primaryLinkLabel": "<string>",
+                "primaryLinkUrl": "",
+                "secondaryLinks": "<array>"
+              },
+              "employees": "<null>",
+              "id": "<uuid>",
+              "idealCustomerProfile": "<boolean>",
+              "inLists": [
+                "cinatra-proof-list-<ns>",
+                "cinatra-proof-other-<ns>"
+              ],
+              "linkedinLink": "<object>",
+              "name": "cinatra-proof-co-<ns>",
+              "position": "<number>",
+              "searchVector": "<string>",
+              "updatedAt": "<string>",
+              "updatedBy": "<object>",
+              "xLink": "<object>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "args": {
+        "inLists": {
+          "containsIlike": "cinatra-proof-list-<ns>"
+        },
+        "limit": 100
+      },
+      "id": "find_companies.members",
+      "tool": "find_companies"
+    },
+    {
+      "answer": {
+        "error": "Object \"cinatraproofmissing\" not found. Use get_object_metadata to list available objects.",
+        "message": "Failed to execute create_view",
+        "success": false
+      },
+      "args": {
+        "name": "cinatra-proof-missing-<ns>",
+        "objectNameSingular": "cinatraproofmissing",
+        "type": "TABLE"
+      },
+      "id": "create_view.failure",
+      "tool": "create_view"
+    }
+  ],
+  "image": "sha256:4207fe56527e21c0e0ab6602bb1c6be7d001396001a38a94045291de4abc6da8",
+  "source": "recorded",
+  "twentyTag": "2.7.3"
+}
