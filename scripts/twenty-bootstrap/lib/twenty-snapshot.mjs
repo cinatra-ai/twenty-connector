@@ -142,12 +142,32 @@ export function canonicalizeSnapshot(snapshot) {
 }
 
 /**
- * Compare two snapshots byte-stable. Returns null on equal, or a short
- * human-readable diff hint when different.
+ * The snapshot fields bound to the environment the proof runs in, never to
+ * Twenty's contract: the address the snapshot was captured from (CI and the
+ * committed file read :3300, a lane's own stack serves another port). The
+ * comparison leaves exactly these out; the written snapshot keeps them, and
+ * the proof names each one in its 04c line.
+ */
+export const ENVIRONMENT_BOUND_FIELDS = Object.freeze(["serverInfo.capturedFrom"]);
+
+// The snapshot without its environment-bound fields (a copy; every other key kept).
+function withoutEnvironmentBound(snapshot) {
+  const info = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot.serverInfo : undefined;
+  if (!info || typeof info !== "object" || Array.isArray(info) || !("capturedFrom" in info)) return snapshot;
+  const kept = {};
+  for (const k of Object.keys(info)) if (k !== "capturedFrom") kept[k] = info[k];
+  const out = {};
+  for (const k of Object.keys(snapshot)) out[k] = k === "serverInfo" ? kept : snapshot[k];
+  return out;
+}
+
+/**
+ * Compare two snapshots byte-stable, ENVIRONMENT_BOUND_FIELDS left out.
+ * Returns null on equal, or a short human-readable diff hint when different.
  */
 export function diffSnapshots(existing, fresh) {
-  const a = canonicalizeSnapshot(existing);
-  const b = canonicalizeSnapshot(fresh);
+  const a = canonicalizeSnapshot(withoutEnvironmentBound(existing));
+  const b = canonicalizeSnapshot(withoutEnvironmentBound(fresh));
   if (a === b) return null;
   // Cheap diff: show first 200 chars where they diverge.
   let i = 0;
