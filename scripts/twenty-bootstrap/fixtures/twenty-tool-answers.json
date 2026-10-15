@@ -1,6 +1,38 @@
 {
   "calls": [
     {
+      "answer": {
+        "applicationId": "<string>",
+        "createdAt": "<string>",
+        "defaultValue": "<null>",
+        "id": "<uuid>",
+        "isActive": "<boolean>",
+        "isCustom": "<boolean>",
+        "isLabelSyncedWithName": "<boolean>",
+        "isNullable": "<boolean>",
+        "isSystem": "<boolean>",
+        "isUIReadOnly": "<boolean>",
+        "isUnique": "<boolean>",
+        "label": "<string>",
+        "name": "cinatraObjectId",
+        "objectMetadataId": "<string>",
+        "options": "<null>",
+        "type": "TEXT",
+        "universalIdentifier": "<string>",
+        "updatedAt": "<string>",
+        "workspaceId": "<string>"
+      },
+      "args": {
+        "isNullable": true,
+        "label": "cinatraObjectId",
+        "name": "cinatraObjectId",
+        "objectMetadataId": "<uuid>",
+        "type": "TEXT"
+      },
+      "id": "create_field_metadata",
+      "tool": "create_field_metadata"
+    },
+    {
       "answer": [
         {
           "applicationId": "<string>",
@@ -68,7 +100,7 @@
           "description": "<null>",
           "icon": "<null>",
           "id": "<uuid>",
-          "isActive": "<boolean>",
+          "isActive": true,
           "isCustom": "<boolean>",
           "isLabelSyncedWithName": "<boolean>",
           "isNullable": "<boolean>",
@@ -84,7 +116,7 @@
           "relationTargetObjectMetadataId": "<null>",
           "settings": "<null>",
           "standardOverrides": "<null>",
-          "type": "<string>",
+          "type": "ARRAY",
           "universalIdentifier": "<string>",
           "updatedAt": "<string>",
           "workspaceId": "<string>"
@@ -106,7 +138,7 @@
           "description": "<null>",
           "icon": "<null>",
           "id": "<uuid>",
-          "isActive": "<boolean>",
+          "isActive": true,
           "isCustom": "<boolean>",
           "isLabelSyncedWithName": "<boolean>",
           "isNullable": "<boolean>",
@@ -122,7 +154,7 @@
           "relationTargetObjectMetadataId": "<null>",
           "settings": "<null>",
           "standardOverrides": "<null>",
-          "type": "<string>",
+          "type": "ARRAY",
           "universalIdentifier": "<string>",
           "updatedAt": "<string>",
           "workspaceId": "<string>"

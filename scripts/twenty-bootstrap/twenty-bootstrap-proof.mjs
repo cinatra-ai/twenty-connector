@@ -12,7 +12,11 @@
 //   6. MCP /mcp tools/list (capture native tools)
 //   7. MCP /mcp tools/call get_tool_catalog (capture workspace catalog;
 //      canonicalize + diff against scripts/twenty-bootstrap/twenty-mcp-tools.json)
-//   8. Metadata API: create-or-find 7 custom fields on Person + Company
+//   8. The connector's 7 custom fields on Person + Company through its own
+//      provisioning module over MCP (src/twenty-schema-provision.mjs, the road
+//      its dev-setup hook takes; every answer read through the contract and
+//      the first create recorded), run twice: the second run must create none.
+//      The two optional social fields stay on the Metadata API (best effort).
 //   9. MCP-driven CRUD smoke — full round-trip: Company + Person + link +
 //      read-back + update + person-delete
 //  10. Lists proof + tool-contract record — through the connector's own
@@ -60,7 +64,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { TwentyClient, maskToken } from "./lib/twenty-client.mjs";
 import { ENVIRONMENT_BOUND_FIELDS, canonicalizeSnapshot, diffSnapshots } from "./lib/twenty-snapshot.mjs";
-import { canonicalJson, diffRecords, recordAndRead, sanitize } from "./lib/twenty-contract-record.mjs";
+import {
+  canonicalJson,
+  diffRecords,
+  freshFieldCreateRecorded,
+  recordAndRead,
+  sanitize,
+} from "./lib/twenty-contract-record.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 // The proof runs AGAINST a cinatra core checkout: the docker compose stack,
@@ -106,6 +116,8 @@ const {
 // The connector's tool contract (argument builders + answer readers): the same
 // module the connector calls through, so this proof's live run tests it.
 const contract = await import(pathToFileURL(join(SCRIPT_DIR, "..", "..", "src", "twenty-tool-contract.mjs")).href);
+// The connector's field provisioning (the dev-setup hook's road), driven by step 8.
+const provision = await import(pathToFileURL(join(SCRIPT_DIR, "..", "..", "src", "twenty-schema-provision.mjs")).href);
 
 const SNAPSHOT_PATH = join(SCRIPT_DIR, "twenty-mcp-tools.json");
 const CONTRACT_FIXTURES_PATH = join(SCRIPT_DIR, "fixtures", "twenty-tool-answers.json");
@@ -130,6 +142,10 @@ const FIXTURE_NS = `bootstrap-${CI_MODE ? "ci" : "local"}-${Date.now().toString(
 
 const RESULTS = [];
 let HARD_FAIL = false;
+// The tool-contract record of this run (steps 8 and 10), printed and compared once by recordContract.
+const CONTRACT_CALLS = [];
+// Step 8 (crm-bootstrap-step-06) passed: the connector's custom fields are present and a second run created none.
+let FIELDS_PASSED = false;
 
 // ----------------------------- logging ----------------------------------
 
@@ -435,29 +451,62 @@ async function step7_toolCatalog(client, nativeTools) {
 
 // ----------------------------- step 8: custom fields ---------------------
 
-// Include the social URL fields and split required vs optional so hard-fail
-// can apply only to load-bearing fields.
+// The 7 REQUIRED fields are the connector's own (CONNECTOR_CUSTOM_FIELDS of the
+// shared contract): downstream resolver hydration and the adapter projection
+// depend on them. They are created through the connector's own provisioning
+// module over MCP — the road its dev-setup hook takes — and read back by a
+// second run that must create none. Only the optional social fields stay on the
+// Metadata API here.
 const CUSTOM_FIELDS = [
-  // Required — downstream resolver hydration + adapter projection depend on these.
-  { objectName: "person", name: "cinatraObjectId", type: "TEXT", required: true },
-  { objectName: "person", name: "apolloPersonId", type: "TEXT", required: true },
-  { objectName: "person", name: "enrichmentStatus", type: "TEXT", required: true },
-  { objectName: "person", name: "inLists", type: "ARRAY", required: true },
-  { objectName: "company", name: "cinatraObjectId", type: "TEXT", required: true },
-  { objectName: "company", name: "apolloOrganizationId", type: "TEXT", required: true },
-  { objectName: "company", name: "inLists", type: "ARRAY", required: true },
   // Optional — socials hydration is nice-to-have; treat as best-effort.
   { objectName: "person", name: "linkedinUrl", type: "LINKS", required: false },
   { objectName: "person", name: "twitterHandle", type: "TEXT", required: false },
 ];
 
-async function step8_customFields(client) {
+async function step8_customFields(client, nativeTools) {
   // Hard-fail on any REQUIRED field that didn't end up present (created or
   // pre-existing). Optional fields (socials) can WARN.
   let created = 0;
   let existing = 0;
   const requiredFailures = [];
   const optionalFailures = [];
+  let connectorDetail = "";
+  if (!nativeTools.some((t) => t.name === "execute_tool")) {
+    requiredFailures.push({ field: "connector-fields", msg: "execute_tool not present" });
+  } else {
+    // Every call result is read by the recorder (lib/twenty-contract-record.mjs): the contract's
+    // readToolOutput, a failure recorded first; the first create_field_metadata call is recorded.
+    const san = { ns: FIXTURE_NS, keyName: API_KEY_NAME };
+    let createRecorded = false;
+    const send = (toolName, args) => client.mcpToolsCall("execute_tool", { toolName, arguments: args });
+    const read = (toolName, args, result) => {
+      const id = toolName === "create_field_metadata" && !createRecorded ? "create_field_metadata" : null;
+      if (id) createRecorded = true;
+      return recordAndRead(CONTRACT_CALLS, { id, tool: toolName, args, result, san });
+    };
+    try {
+      const first = await provision.provisionConnectorFields({ send, read });
+      const again = await provision.provisionConnectorFields({ send, read });
+      created += first.created.length;
+      existing += first.existing.length;
+      for (const field of first.conflicts) {
+        requiredFailures.push({ field, msg: "present with another type or inactive; never changed" });
+      }
+      if (again.created.length !== 0 || again.existing.length !== contract.CONNECTOR_CUSTOM_FIELDS.length) {
+        requiredFailures.push({
+          field: "connector-fields-rerun",
+          msg: `second run created=${again.created.length} existing=${again.existing.length}`,
+        });
+      }
+      connectorDetail =
+        ` connector-mcp: created=${first.created.length} existing=${first.existing.length}` +
+        ` rerun-existing=${again.existing.length} rerun-created=${again.created.length}`;
+    } catch (err) {
+      const msg = sanitize(String(err?.message ?? err), san).slice(0, 200);
+      requiredFailures.push({ field: "connector-fields", msg });
+      log("warn", `connector custom fields via MCP failed: ${msg}`);
+    }
+  }
   for (const f of CUSTOM_FIELDS) {
     try {
       const exists = await fieldExists(client, f.objectName, f.name);
@@ -485,11 +534,17 @@ async function step8_customFields(client) {
   const detail =
     `existing=${existing} created=${created}` +
     ` required-failed=${requiredFailures.length}` +
-    ` optional-failed=${optionalFailures.length}`;
+    ` optional-failed=${optionalFailures.length}` +
+    connectorDetail;
   if (requiredFailures.length > 0) {
-    record("crm-bootstrap-step-06", "FAIL", `${detail} :: required missing: ${requiredFailures.map((f) => f.field).join(", ")}`);
+    record(
+      "crm-bootstrap-step-06",
+      "FAIL",
+      `${detail} :: required missing: ${requiredFailures.map((f) => `${f.field} (${f.msg})`).join(", ")}`,
+    );
     return false;
   }
+  FIELDS_PASSED = true;
   record(
     "crm-bootstrap-step-06",
     optionalFailures.length > 0 ? "WARN" : "PASS",
@@ -769,7 +824,7 @@ async function step10_lists(client, nativeTools) {
   const san = { ns, keyName: API_KEY_NAME };
   const slug = `cinatra-proof-list-${ns}`;
   const other = `cinatra-proof-other-${ns}`;
-  const calls = [];
+  const calls = CONTRACT_CALLS;
   const problems = [];
   // The ids of the records this run creates: a recorded find answer keeps only these.
   const own = new Set();
@@ -915,17 +970,33 @@ async function step10_lists(client, nativeTools) {
   } catch (err) {
     record("crm-bootstrap-step-08", "FAIL", `lists proof: ${sanitize(String(err?.message ?? err), san).slice(0, 400)}`);
   } finally {
-    await recordContract(calls, passed);
+    await recordContract(calls, passed && FIELDS_PASSED);
   }
 }
 
-// `listsPassed`: the lists proof (crm-bootstrap-step-08) passed. A record of a run
-// with problems is printed and compared, but never written over the fixtures.
+// `listsPassed`: the custom fields (crm-bootstrap-step-06) and the lists proof
+// (crm-bootstrap-step-08) passed. A record of a run with problems is printed and
+// compared, but never written over the fixtures. Nor is the record of a
+// workspace that already had the connector's custom fields: it holds no fresh
+// create_field_metadata call (freshFieldCreateRecorded), so its drift says so.
 async function recordContract(calls, listsPassed) {
   const live = { calls, image: twentyImageId(), source: "recorded", twentyTag: TWENTY_RELEASE };
   process.stdout.write(`=== TWENTY TOOL CONTRACT RECORD BEGIN ===\n${canonicalJson(live)}=== TWENTY TOOL CONTRACT RECORD END ===\n`);
+  const freshCreate = freshFieldCreateRecorded(live);
   if (UPDATE_FIXTURES && !CI_MODE && !listsPassed) {
-    record("crm-bootstrap-step-08r", "FAIL", "UPDATE_FIXTURES refused: the lists proof (crm-bootstrap-step-08) has problems, so the fixtures are kept");
+    record(
+      "crm-bootstrap-step-08r",
+      "FAIL",
+      "UPDATE_FIXTURES refused: the custom fields (crm-bootstrap-step-06) or the lists proof (crm-bootstrap-step-08) has problems, so the fixtures are kept",
+    );
+    return;
+  }
+  if (UPDATE_FIXTURES && !CI_MODE && !freshCreate) {
+    record(
+      "crm-bootstrap-step-08r",
+      "FAIL",
+      "UPDATE_FIXTURES refused: the workspace already had the connector's custom fields, so no fresh create_field_metadata call was recorded; record against a fresh workspace",
+    );
     return;
   }
   if (UPDATE_FIXTURES && !CI_MODE) {
@@ -946,7 +1017,8 @@ async function recordContract(calls, listsPassed) {
     record(
       "crm-bootstrap-step-08r",
       CI_MODE ? "FAIL" : "WARN",
-      `tool-contract drift: ${lines.length} difference(s) against fixtures/twenty-tool-answers.json; first: ${lines[0].slice(0, 300)}`,
+      `tool-contract drift: ${lines.length} difference(s) against fixtures/twenty-tool-answers.json; first: ${lines[0].slice(0, 300)}` +
+        (freshCreate ? "" : " (the workspace already had the connector's custom fields: no fresh create_field_metadata call was recorded)"),
     );
     return;
   }
@@ -1184,7 +1256,7 @@ async function main() {
   }
 
   await step7_toolCatalog(client, nativeTools);
-  await step8_customFields(client);
+  await step8_customFields(client, nativeTools);
 
   // Pull the workspace catalog so we know the exact tool names for DATABASE_CRUD.
   let catalogToolNames = [];

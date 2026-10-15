@@ -520,3 +520,186 @@ describe("manifest: the host-handed key's env var", () => {
     expect(HANDED_ENV_VAR).toMatch(/^[A-Z][A-Z0-9_]*$/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE CONNECTOR'S CUSTOM FIELDS (cinatra-ai/twenty-connector#83): once the row
+// has a working key, the hook creates the custom fields the connector reads
+// and writes that the workspace lacks, through Twenty's MCP metadata tools with
+// the row's own key (read back through the host's gated resolver). The fake
+// answers in Twenty's shapes: JSON text of the tool's value, bare lists for the
+// metadata reads, the created field bare, `{ success: false, ... }` for a
+// failure; every answer is read through the tool contract.
+// ---------------------------------------------------------------------------
+
+const WIRED_ROW = { id: "twenty-workspace", nangoConnectionId: "twenty-workspace", serverUrl: LOCAL_TWENTY.mcpUrl } as never;
+const PERSON_OBJECT = "00000000-0000-4000-8000-0000000000a1";
+const COMPANY_OBJECT = "00000000-0000-4000-8000-0000000000b2";
+
+type McpCall = { url: string; authorization: string | undefined; toolName: string; args: Record<string, unknown> };
+
+/** A fetch that answers Twenty's MCP endpoint; `dataModel: false` = a key whose role lacks the data-model permission;
+ *  `malformed: true` = a field list whose entry carries no id. */
+function stubTwentyMcp(opts: { dataModel?: boolean; existing?: string[]; malformed?: boolean } = {}) {
+  const calls: McpCall[] = [];
+  const fields: Record<string, Array<{ id?: string; name: string; type: string; isActive: boolean }>> = {
+    [PERSON_OBJECT]: [],
+    [COMPANY_OBJECT]: [],
+  };
+  for (const name of opts.existing ?? []) {
+    const [object, field] = name.split(".");
+    fields[object === "person" ? PERSON_OBJECT : COMPANY_OBJECT].push({
+      id: `fld-${object}-${field}`,
+      name: field,
+      type: field === "inLists" ? "ARRAY" : "TEXT",
+      isActive: true,
+    });
+  }
+  const fetchMock = vi.fn(async (url: string, init: { headers: Record<string, string>; body: string }) => {
+    const body = JSON.parse(init.body) as { params: { arguments: { toolName: string; arguments: Record<string, unknown> } } };
+    const { toolName, arguments: args } = body.params.arguments;
+    calls.push({ url, authorization: init.headers.authorization, toolName, args });
+    let value: unknown;
+    if (opts.dataModel === false) value = { success: false, message: `Tool "${toolName}" not found`, error: "not found" };
+    else if (toolName === "get_object_metadata")
+      value = [{ id: PERSON_OBJECT, nameSingular: "person" }, { id: COMPANY_OBJECT, nameSingular: "company" }];
+    else if (toolName === "get_field_metadata")
+      value = opts.malformed ? [{ name: "inLists", type: "ARRAY" }] : [...fields[String(args.objectMetadataId)]];
+    else if (toolName === "create_field_metadata") {
+      const created = { id: `f-${String(args.name)}`, name: String(args.name), type: String(args.type), isActive: true };
+      fields[String(args.objectMetadataId)].push(created);
+      value = created;
+    } else value = { success: false, message: "unknown", error: "unknown" };
+    const envelope = { jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify(value) }], isError: false } };
+    return { ok: true, status: 200, headers: { get: () => "application/json" }, text: async () => JSON.stringify(envelope) } as unknown as Response;
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { calls, fetchMock };
+}
+
+/** A first wire whose minted key resolves through the host's gated resolver afterwards. */
+function firstWireWithResolvableKey(): Fakes {
+  const t = makeDeps();
+  t.getServerById.mockReturnValueOnce(null).mockReturnValue(WIRED_ROW);
+  t.docker.mockReturnValueOnce({ code: 0, out: "" }).mockReturnValueOnce({ code: 0, out: JWT });
+  t.resolveBearer.mockResolvedValue(JWT);
+  return t;
+}
+
+describe("the connector's custom fields (twenty-connector#83)", () => {
+  it("a working key: the hook creates the seven missing fields through the row's own key, after the row is wired", async () => {
+    const t = firstWireWithResolvableKey();
+    const twenty = stubTwentyMcp();
+
+    const r = await autoSetupLocalTwenty(t.deps);
+
+    expect(r.status).toBe("created");
+    const creates = twenty.calls.filter((c) => c.toolName === "create_field_metadata").map((c) => `${c.args.objectMetadataId}.${c.args.name}`);
+    expect(creates.sort()).toEqual(
+      [
+        `${PERSON_OBJECT}.cinatraObjectId`,
+        `${PERSON_OBJECT}.apolloPersonId`,
+        `${PERSON_OBJECT}.enrichmentStatus`,
+        `${PERSON_OBJECT}.inLists`,
+        `${COMPANY_OBJECT}.cinatraObjectId`,
+        `${COMPANY_OBJECT}.apolloOrganizationId`,
+        `${COMPANY_OBJECT}.inLists`,
+      ].sort(),
+    );
+    expect(twenty.calls.every((c) => c.url === LOCAL_TWENTY.mcpUrl && c.authorization === `Bearer ${JWT}`)).toBe(true);
+    expect(t.resolveBearer).toHaveBeenCalledWith(WIRED_ROW);
+    // The fields are made only once the row exists.
+    expect(t.upsertServer.mock.invocationCallOrder[0]).toBeLessThan(twenty.fetchMock.mock.invocationCallOrder[0]);
+    if (r.status !== "created") throw new Error("expected created");
+    expect(r.detail).toContain("custom fields: 7 present (7 created)");
+  });
+
+  it("a workspace that already has the fields: no create, the detail says all seven are present", async () => {
+    const t = firstWireWithResolvableKey();
+    const twenty = stubTwentyMcp({
+      existing: [
+        "person.cinatraObjectId",
+        "person.apolloPersonId",
+        "person.enrichmentStatus",
+        "person.inLists",
+        "company.cinatraObjectId",
+        "company.apolloOrganizationId",
+        "company.inLists",
+      ],
+    });
+
+    const r = await autoSetupLocalTwenty(t.deps);
+
+    expect(twenty.calls.some((c) => c.toolName === "create_field_metadata")).toBe(false);
+    if (r.status !== "created") throw new Error("expected created");
+    expect(r.detail).toContain("custom fields: 7 present (0 created)");
+    expect(t.deps.log).not.toHaveBeenCalled();
+  });
+
+  it("no working bearer: Twenty is asked nothing about fields and the status reads as before", async () => {
+    const t = makeDeps();
+    (t.deps.nango.isNangoConfigured as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    t.resolveBearer.mockResolvedValue(JWT);
+    const twenty = stubTwentyMcp();
+
+    const r = await autoSetupLocalTwenty(t.deps);
+
+    expect(twenty.fetchMock).not.toHaveBeenCalled();
+    if (r.status !== "created") throw new Error("expected created");
+    expect(r.detail).not.toContain("custom fields");
+  });
+
+  it("a key without the data-model permission: one fixed hint is logged and the hook still wires the row", async () => {
+    const t = firstWireWithResolvableKey();
+    stubTwentyMcp({ dataModel: false });
+
+    const r = await autoSetupLocalTwenty(t.deps);
+
+    expect(r.status).toBe("created");
+    expect(t.upsertServer).toHaveBeenCalledTimes(1);
+    const lines = (t.deps.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^custom fields not checked \(metadata read failed\) — CRM lists read no members until/);
+    if (r.status !== "created") throw new Error("expected created");
+    expect(r.detail).toContain("custom fields not checked (metadata read failed)");
+  });
+
+  it("a malformed field list (an entry without its id): the contract refuses it, no field is created and the hook still wires the row", async () => {
+    const t = firstWireWithResolvableKey();
+    const twenty = stubTwentyMcp({ malformed: true });
+
+    const r = await autoSetupLocalTwenty(t.deps);
+
+    expect(r.status).toBe("created");
+    expect(twenty.calls.some((c) => c.toolName === "create_field_metadata")).toBe(false);
+    if (r.status !== "created") throw new Error("expected created");
+    expect(r.detail).toContain("custom fields not checked (metadata read failed)");
+  });
+
+  it("NEVER-THROW: a throwing resolver or an unreachable Twenty never fails the hook", async () => {
+    const t = firstWireWithResolvableKey();
+    t.resolveBearer.mockRejectedValue(new Error(`vault down ${JWT}`));
+    const r1 = await autoSetupLocalTwenty(t.deps);
+    expect(r1.status).toBe("created");
+    if (r1.status !== "created") throw new Error("expected created");
+    expect(r1.detail).toContain("custom fields not checked (no resolvable key)");
+
+    const u = firstWireWithResolvableKey();
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new Error(`connect ECONNREFUSED ${JWT}`);
+    }));
+    const r2 = await autoSetupLocalTwenty(u.deps);
+    expect(r2.status).toBe("created");
+    expect(surfacedText(u, r2)).not.toContain(JWT);
+  });
+
+  it("SECRET BOUNDARY: the row's key reaches the MCP Authorization header only — never a log line, the status or the row", async () => {
+    const t = firstWireWithResolvableKey();
+    const twenty = stubTwentyMcp({ dataModel: false });
+
+    const r = await autoSetupLocalTwenty(t.deps);
+
+    expect(twenty.calls.length).toBeGreaterThan(0);
+    expect(twenty.fetchMock.mock.calls.every((c) => !String((c[1] as { body: string }).body).includes(JWT))).toBe(true);
+    expect(surfacedText(t, r)).not.toContain(JWT);
+  });
+});

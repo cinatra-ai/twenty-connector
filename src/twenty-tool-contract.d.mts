@@ -22,6 +22,8 @@ export declare const FIND_PAGE_LIMIT: number;
 export declare const VIEWS_LIMIT: number;
 export declare const FIELD_METADATA_LIMIT: number;
 export declare const LIST_FIELD: "inLists";
+export type CustomField = { readonly objectType: RecordType; readonly name: string; readonly type: "TEXT" | "ARRAY" };
+export declare const CONNECTOR_CUSTOM_FIELDS: ReadonlyArray<CustomField>;
 export declare const LIST_FILTER_OPERAND: "CONTAINS";
 export declare const LIST_VIEW_TYPE: "TABLE";
 export declare const SLUG_PATTERN: RegExp;
@@ -52,7 +54,8 @@ export type EntryKind =
   | "object"
   | "field"
   | "created view"
-  | "created view filter";
+  | "created view filter"
+  | "created field";
 export type EntryFieldType = "id" | "string" | "string?" | "number" | "count" | "true" | "boolean?" | "strings?" | "string|any" | `@${string}`;
 export declare const ENTRY_FIELDS: Readonly<Record<EntryKind, Readonly<Record<string, EntryFieldType>>>>;
 export declare const TOOL_ANSWERS: Readonly<Record<string, string>>;
@@ -97,6 +100,13 @@ export declare function getViewsArgs(objectType: RecordType): { objectNameSingul
 export declare function getObjectMetadataArgs(): { limit: number };
 export declare function getFieldMetadataArgs(objectMetadataId: string): { objectMetadataId: string; limit: number };
 export declare function getViewFiltersArgs(viewId: string): { viewId: string };
+export declare function createFieldMetadataArgs(input: { objectMetadataId: string; name: string; type: string }): {
+  objectMetadataId: string;
+  type: string;
+  name: string;
+  label: string;
+  isNullable: true;
+};
 export declare function createViewArgs(input: { name: string; objectType: RecordType }): {
   name: string;
   objectNameSingular: string;

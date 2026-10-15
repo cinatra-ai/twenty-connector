@@ -11,14 +11,16 @@
 // (find_*, find_one_*, create_*, update_*) answer
 // `{ success, message, result }`; the view and metadata tools (get_views,
 // get_view_filters, get_object_metadata, get_field_metadata, create_view,
-// create_view_filter) answer their value bare (an array or an object). A tool
+// create_view_filter, create_field_metadata) answer their value bare (an array
+// or an object). A tool
 // that fails answers `{ success: false, message, error }` as ordinary content,
 // never as an MCP error: readToolOutput turns that into a thrown error.
 //
 // Every answer is read against ONE field table (ENTRY_FIELDS): each kind of
 // entry an answer carries (an MCP content item, a find answer and its page, a
 // person, a company and their composite fields, a written id, a view, a view
-// filter, an object, a field, a created view and a created view filter) names
+// filter, an object, a field, a created view, a created view filter and a
+// created field) names
 // the fields the connector and the proof rely on, each with the type the
 // pinned Twenty source gives it. TOOL_ANSWERS names each tool's answer as a
 // type over that table. checkEntry checks one entry of a kind and RETURNS A
@@ -47,6 +49,23 @@ export const VIEWS_LIMIT = 100;
 export const FIELD_METADATA_LIMIT = 100;
 /** The custom array field that carries a record's list slugs. */
 export const LIST_FIELD = "inLists";
+/**
+ * The custom fields the connector reads and writes (the person and company
+ * kinds of ENTRY_FIELDS name them), per record type, with the Twenty field type
+ * each is created with. The development setup (src/dev-setup.ts) and the
+ * bootstrap proof's step 8 create the missing ones through
+ * src/twenty-schema-provision.mjs. The social links are Twenty's standard
+ * linkedinLink / xLink fields, never custom ones.
+ */
+export const CONNECTOR_CUSTOM_FIELDS = Object.freeze([
+  Object.freeze({ objectType: "contact", name: "cinatraObjectId", type: "TEXT" }),
+  Object.freeze({ objectType: "contact", name: "apolloPersonId", type: "TEXT" }),
+  Object.freeze({ objectType: "contact", name: "enrichmentStatus", type: "TEXT" }),
+  Object.freeze({ objectType: "contact", name: "inLists", type: "ARRAY" }),
+  Object.freeze({ objectType: "account", name: "cinatraObjectId", type: "TEXT" }),
+  Object.freeze({ objectType: "account", name: "apolloOrganizationId", type: "TEXT" }),
+  Object.freeze({ objectType: "account", name: "inLists", type: "ARRAY" }),
+]);
 /** The view-filter operand that marks a view as a list (upper case, ViewFilterOperand). */
 export const LIST_FILTER_OPERAND = "CONTAINS";
 /** The view type a list is created with (upper case, ViewType). */
@@ -163,11 +182,16 @@ export const ENTRY_FIELDS = Object.freeze({
   "view filter": Object.freeze({ id: "id", fieldMetadataId: "id", operand: "string", value: "string|any" }),
   // get_object_metadata (object-metadata-tools.factory.ts:113-122; object-metadata.dto.ts:32-39).
   object: Object.freeze({ id: "id", nameSingular: "string" }),
-  // get_field_metadata (field-metadata-tools.factory.ts:178-193; field-metadata.dto.ts:63-80).
-  field: Object.freeze({ id: "id", name: "string" }),
+  // get_field_metadata (field-metadata-tools.factory.ts:171-193, the service's entities; field-metadata.dto.ts:62-80
+  // id, type and name non-null, :107-109 isActive optional): the type and the active flag decide whether a custom
+  // field the connector needs is present.
+  field: Object.freeze({ id: "id", name: "string", type: "string", isActive: "boolean?" }),
   // create_view / create_view_filter answer the created entity bare (view.dto.ts:29-33; view-filter.dto.ts:16-23).
   "created view": Object.freeze({ id: "id", name: "string" }),
   "created view filter": Object.freeze({ id: "id", fieldMetadataId: "id", operand: "string" }),
+  // create_field_metadata answers the created field bare (field-metadata-tools.factory.ts:194-231, through
+  // from-flat-field-metadata-to-field-metadata-dto.util.ts:34-59: id, name and type always set).
+  "created field": Object.freeze({ id: "id", name: "string", type: "string" }),
 });
 
 /** Each tool's answer, as a type over ENTRY_FIELDS. */
@@ -186,6 +210,7 @@ export const TOOL_ANSWERS = Object.freeze({
   get_field_metadata: "@field[]",
   create_view: "@created view",
   create_view_filter: "@created view filter",
+  create_field_metadata: "@created field",
 });
 
 const FIELD_WANT = {
@@ -402,8 +427,9 @@ export function readArrayAnswer(toolName, payload, makeError = defaultMakeError)
   return readAnswer(toolName, payload, makeError);
 }
 
-/** create_view / create_view_filter: the bare created object, checked as a created view (id, name) or a
- *  created view filter (id, fieldMetadataId, operand), and returned as its projection. */
+/** create_view / create_view_filter / create_field_metadata: the bare created object, checked as a created
+ *  view (id, name), a created view filter (id, fieldMetadataId, operand) or a created field (id, name, type),
+ *  and returned as its projection. */
 export function readCreatedEntity(toolName, payload, makeError = defaultMakeError) {
   if (!String(TOOL_ANSWERS[toolName] ?? "").startsWith("@created ")) {
     throw new TwentyToolContractError(-32603, `${toolName}: no created-object answer is known for this tool`);
@@ -538,6 +564,14 @@ export function getObjectMetadataArgs() {
 
 export function getFieldMetadataArgs(objectMetadataId) {
   return { objectMetadataId, limit: FIELD_METADATA_LIMIT };
+}
+
+/** create_field_metadata: one of CONNECTOR_CUSTOM_FIELDS on an object, as Twenty's input schema takes it
+ *  (field-metadata-tools.factory.ts:34-74: objectMetadataId, type, name, label; isNullable optional). */
+export function createFieldMetadataArgs({ objectMetadataId, name, type }) {
+  const spec = CONNECTOR_CUSTOM_FIELDS.find((f) => f.name === name && f.type === type);
+  if (!spec) throw new TwentyToolContractError(-32602, `"${name}" (${type}) is not a custom field of the connector`);
+  return { objectMetadataId, type, name, label: name, isNullable: true };
 }
 
 export function getViewFiltersArgs(viewId) {
