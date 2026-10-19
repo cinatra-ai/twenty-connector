@@ -140,7 +140,7 @@ export async function executeTwentyMcpTool(
   const contentType = response.headers.get("content-type") ?? "";
   let parsed: { result?: ToolsCallResult; error?: { code: number; message: string; data?: unknown } };
   if (contentType.includes("text/event-stream")) {
-    parsed = parseSseEnvelope(await response.text());
+    parsed = parseSseEnvelope(await response.text(), jsonRpc.id);
   } else {
     parsed = JSON.parse(await response.text());
   }
@@ -188,12 +188,23 @@ export function twentyMcpError(code: number, message: string, data?: unknown): T
   return new TwentyMcpError(code, message, data);
 }
 
-function parseSseEnvelope(text: string): {
+/**
+ * Read the JSON-RPC response for request `requestId` from an SSE body.
+ *
+ * Twenty can send notifications (for example `notifications/progress`) as
+ * `data:` frames before the response frame. A notification carries a `method`
+ * or no `id`; it is skipped. The frame returned is the one whose `id` equals
+ * the request's id and that carries `result` or `error`. When no such frame
+ * exists, the envelope carries neither, and the caller throws
+ * "upstream returned no result".
+ */
+export function parseSseEnvelope(
+  text: string,
+  requestId: string | number,
+): {
   result?: ToolsCallResult;
   error?: { code: number; message: string; data?: unknown };
 } {
-  // Twenty's MCP SSE responses send a single `data:` line containing the
-  // JSON-RPC envelope. We collect the first data-line and parse it.
   const dataLines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -202,5 +213,24 @@ function parseSseEnvelope(text: string): {
   if (dataLines.length === 0) {
     throw new TwentyMcpError(-32603, "no SSE data line in upstream response");
   }
-  return JSON.parse(dataLines[0]);
+  for (const line of dataLines) {
+    let frame: unknown;
+    try {
+      frame = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!frame || typeof frame !== "object" || Array.isArray(frame)) continue;
+    const f = frame as {
+      id?: unknown;
+      method?: unknown;
+      result?: ToolsCallResult;
+      error?: { code: number; message: string; data?: unknown };
+    };
+    if (f.method !== undefined || f.id === undefined || f.id === null) continue;
+    if (f.id !== requestId) continue;
+    if (f.result === undefined && f.error === undefined) continue;
+    return f.error !== undefined ? { error: f.error } : { result: f.result };
+  }
+  return {};
 }
