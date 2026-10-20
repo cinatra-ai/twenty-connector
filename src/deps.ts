@@ -74,10 +74,16 @@ export interface TwentyConnectorHostDeps {
   getServerById: (id: string) => ExternalMcpServerRecordShape | null;
   /** Every registry row (cached host-side, createdAt ASC). */
   listServers: () => ExternalMcpServerRecordShape[];
-  /** Upstream bearer mint for a row via its Nango binding (null when Nango is
-   * unconfigured, the row has no connection, or resolution fails — callers
-   * treat null as "no auth header"). IN-PROCESS ONLY, per the TRUST note. */
-  resolveBearer: (server: ExternalMcpServerRecordShape) => Promise<string | null>;
+  /** Upstream bearer mint for a row via its Nango binding. Without `opts`
+   * (every non-list call and dev setup), the host's worker gate: null when
+   * Nango is unconfigured, the row has no connection, or resolution fails —
+   * callers treat null as "no auth header". With `{ forPerson: true }` (the
+   * six list methods, cinatra#3562 R66), the host decides for the person
+   * running the step, on the connection as shared with them: it never answers
+   * null and refuses by name (`twenty-connection-no-person`,
+   * `twenty-connection-not-shared`, `twenty-connection-unusable`). An older
+   * host ignores `opts`. IN-PROCESS ONLY, per the TRUST note. */
+  resolveBearer: (server: ExternalMcpServerRecordShape, opts?: { forPerson?: true }) => Promise<string | null>;
   // --- setup-page connect surface (twenty-connector#39, cinatra#1097) ------
   // The host connect/disconnect implementations the connector-local
   // "use server" actions (./actions) forward to at POST time — the setup

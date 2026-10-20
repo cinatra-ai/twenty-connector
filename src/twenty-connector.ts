@@ -16,14 +16,18 @@ import "server-only";
 // and never reads as an absent list or an empty record, and this file reads no
 // field of an answer that no check has covered.
 //
-// Lists: a list is a person or company view that carries the filter
-// `inLists CONTAINS <slug>`; its slug is read back from that filter. A record
-// is a member when its `inLists` array holds the slug. A view without that
-// filter is not a list, so views that already existed in the CRM have no
-// members until records are tagged. A list is found among the first 100 views
-// of its object (get_views answers at most 100 and has no offset); when an
-// answer holds 100 views, a read that needs every view fails closed with an
-// error naming that ceiling instead of answering a shorter list.
+// Lists (cinatra#3562): a people list is any person view that Twenty's view
+// picker shows (TABLE, KANBAN, CALENDAR), named as Twenty renders it
+// (`All {objectLabelPlural}` reads `All People`), and its members are what the
+// view's own filter matches (get_view_query_parameters), read twice in full.
+// A filter whose meaning depends on the viewer refuses by name. The person
+// views are read completely: past get_views' ceiling of 100, from Twenty's
+// REST metadata API. A company list keeps the slug rule: a company view that
+// carries the filter `inLists CONTAINS <slug>`, whose members are the records
+// whose `inLists` array holds the slug, found among the first 100 company
+// views (an answer of 100 fails closed). Every list read runs for the person
+// running it, on Cinatra's Twenty connection as shared with them (the
+// "person" call mode); every other call keeps the host's worker gate.
 //
 // All upstream calls go through `executeTwentyMcpTool` which resolves the
 // live Twenty row from the external MCP registry and attaches the bearer
@@ -37,7 +41,14 @@ import type {
   CrmListMembership,
 } from "@cinatra-ai/sdk-extensions";
 
-import { executeTwentyMcpTool, readToolOutput, twentyMcpError, TwentyMcpError } from "./twenty-mcp-call";
+import {
+  executeTwentyMcpTool,
+  getTwentyRest,
+  readToolOutput,
+  twentyMcpError,
+  TwentyMcpError,
+  type TwentyCallMode,
+} from "./twenty-mcp-call";
 import {
   OBJECTS,
   LIST_FIELD,
@@ -49,31 +60,47 @@ import {
   emailFilter,
   findArgs,
   findOneArgs,
+  FIELD_METADATA_LIMIT,
+  canonicalJson,
   getFieldMetadataArgs,
+  getFieldMetadataByIdArgs,
   getObjectMetadataArgs,
+  getObjectMetadataByIdArgs,
   getViewFiltersArgs,
+  getViewQueryParametersArgs,
   getViewsArgs,
+  isListedViewType,
   isSlug,
+  memberFindFilter,
   membershipFilter,
   membershipUpdateArgs,
   personSearchFilter,
   readAllPages,
   readArrayAnswer,
   readCreatedEntity,
+  readEntries,
   readFindOne,
   readFindPage,
   readListFieldId,
   readListSlug,
   readListSlugs,
+  readMemberIds,
   readObjectIds,
+  readOneById,
+  readViewFilters,
+  readViewQuery,
+  refusal,
+  renderViewName,
   readWrittenId,
   slugify,
   slugsWith,
   slugsWithout,
   updateRecordArgs,
+  viewerDependence,
   viewsAtCeiling,
   type FindPage,
   type RecordType,
+  type ViewLabels,
 } from "./twenty-tool-contract.mjs";
 
 // ---------------------------------------------------------------------------
@@ -108,6 +135,13 @@ type TwentyCompany = {
 };
 
 type TwentyView = {
+  id: string;
+  name: string;
+  type: string;
+  objectMetadataId: string;
+};
+
+type TwentyCreatedView = {
   id: string;
   name: string;
 };
@@ -181,8 +215,16 @@ function accountFromWrite(id: string, input: Partial<CrmAccount>): CrmAccount {
 // Calls (every one through the shared contract)
 // ---------------------------------------------------------------------------
 
-async function callTool(toolName: string, args: Record<string, unknown>): Promise<unknown> {
-  const result = await executeTwentyMcpTool(toolName, args);
+// `mode` is the call's bearer decision (./twenty-mcp-call TwentyCallMode): the
+// six list methods pass "person"; every other caller keeps the "worker" default,
+// whose transport call is today's two-argument call byte for byte.
+async function callTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  mode: TwentyCallMode = "worker",
+): Promise<unknown> {
+  const result =
+    mode === "person" ? await executeTwentyMcpTool(toolName, args, "person") : await executeTwentyMcpTool(toolName, args);
   return readToolOutput(toolName, result);
 }
 
@@ -190,17 +232,19 @@ async function findPage<R>(
   objectType: RecordType,
   filter: Record<string, unknown>,
   page: { limit: number; offset: number },
+  mode: TwentyCallMode = "worker",
 ): Promise<FindPage<R>> {
   const tool = OBJECTS[objectType].find;
-  return readFindPage<R>(tool, await callTool(tool, findArgs(filter, page)), twentyMcpError);
+  return readFindPage<R>(tool, await callTool(tool, findArgs(filter, page), mode), twentyMcpError);
 }
 
 async function findAll<R>(
   objectType: RecordType,
   filter: Record<string, unknown>,
   want?: number,
+  mode: TwentyCallMode = "worker",
 ): Promise<R[]> {
-  return readAllPages<R>((page) => findPage<R>(objectType, filter, page), {
+  return readAllPages<R>((page) => findPage<R>(objectType, filter, page, mode), {
     want: want ?? Number.POSITIVE_INFINITY,
     toolName: OBJECTS[objectType].find,
     makeError: twentyMcpError,
@@ -209,13 +253,17 @@ async function findAll<R>(
 
 /** One record by id: null when the answer holds zero records (Twenty answers an
  *  unknown id so); every failed answer throws, whatever its message says. */
-async function findOne<R>(objectType: RecordType, id: string): Promise<R | null> {
+async function findOne<R>(objectType: RecordType, id: string, mode: TwentyCallMode = "worker"): Promise<R | null> {
   const tool = OBJECTS[objectType].findOne;
-  return readFindOne<R>(tool, await callTool(tool, findOneArgs(id)), twentyMcpError);
+  return readFindOne<R>(tool, await callTool(tool, findOneArgs(id), mode), twentyMcpError);
 }
 
-async function writeRecord(toolName: string, args: Record<string, unknown>): Promise<string> {
-  return readWrittenId(toolName, await callTool(toolName, args), twentyMcpError);
+async function writeRecord(
+  toolName: string,
+  args: Record<string, unknown>,
+  mode: TwentyCallMode = "worker",
+): Promise<string> {
+  return readWrittenId(toolName, await callTool(toolName, args, mode), twentyMcpError);
 }
 
 /** The record after a successful write: re-read by id. A write that succeeded is
@@ -291,15 +339,19 @@ export const twentyConnector: CrmConnector = {
     return company ? mapCompanyToAccount(company) : accountFromWrite(id, patch);
   },
 
-  // ----- Lists (Twenty: a view filtered on `inLists CONTAINS <slug>`) -----
+  // ----- Lists (Twenty: people views by their own filter; company views by slug) -----
 
   async searchLists({ query, objectType }): Promise<CrmList[]> {
     const lowered = (query ?? "").trim().toLowerCase();
     const types: RecordType[] = objectType ? [objectType] : ["contact", "account"];
     const out: CrmList[] = [];
     for (const type of types) {
-      // Fail closed before reading views: the list field's id comes from the object metadata
-      // (listFieldId throws when the metadata names no person and company objects); a type whose
+      if (type === "contact") {
+        out.push(...(await personLists(lowered)));
+        continue;
+      }
+      // Company lists (unchanged): fail closed before reading views — the list field's id comes from the object
+      // metadata (listFieldId throws when the metadata names no person and company objects); a type whose
       // `inLists` field is not provisioned has no lists.
       if (!(await listFieldId(type))) continue;
       const views = await readViews(type);
@@ -314,16 +366,19 @@ export const twentyConnector: CrmConnector = {
   },
 
   async getList({ id }): Promise<CrmList | null> {
-    let atCeiling: RecordType | null = null;
-    for (const type of ["contact", "account"] as const) {
-      const views = await readViews(type);
-      const view = views.find((v) => v.id === id);
-      if (view) return listOf(view, type);
-      if (!atCeiling && viewsAtCeiling(views)) atCeiling = type;
+    const person = await readPersonViews();
+    const view = person.find((v) => v.id === id);
+    if (view) {
+      const labels = await personLabels(person);
+      return personListOf(view, labels);
     }
-    // Not found: when an object's answer held the ceiling, the list may be a view
-    // get_views left out, so the miss is no answer.
-    if (atCeiling) throw viewsCeilingError(atCeiling);
+    // Not a person view: the company road, as before.
+    const views = await readViews("account");
+    const company = views.find((v) => v.id === id);
+    if (company) return listOf(company, "account");
+    // Not found: when the company answer held the ceiling, the list may be a view get_views left out, so the
+    // miss is no answer. The person list is complete (readPersonViews).
+    if (viewsAtCeiling(views)) throw viewsCeilingError("account");
     return null;
   },
 
@@ -345,14 +400,18 @@ export const twentyConnector: CrmConnector = {
     }
     // The created view's projection: its id and its checked name (Twenty answers the
     // name it stored; a created view without a string name throws, never returns).
-    const view = readCreatedEntity<TwentyView>(
+    const view = readCreatedEntity<TwentyCreatedView>(
       "create_view",
-      await callTool("create_view", createViewArgs({ name: input.name, objectType: input.objectType })),
+      await callTool("create_view", createViewArgs({ name: input.name, objectType: input.objectType }), "person"),
       twentyMcpError,
     );
     readCreatedEntity(
       "create_view_filter",
-      await callTool("create_view_filter", createListFilterArgs({ viewId: view.id, fieldMetadataId: fieldId, slug })),
+      await callTool(
+        "create_view_filter",
+        createListFilterArgs({ viewId: view.id, fieldMetadataId: fieldId, slug }),
+        "person",
+      ),
       twentyMcpError,
     );
     return { id: view.id, slug, name: view.name, objectType: input.objectType };
@@ -362,13 +421,70 @@ export const twentyConnector: CrmConnector = {
     contactIds: string[];
     accountIds: string[];
   }> {
-    const list = await this.getList({ id: listId });
-    if (!list) return { contactIds: [], accountIds: [] };
-    const records = await findAll<{ id: string }>(list.objectType, membershipFilter(list.slug), limit);
-    const ids = records.map((r) => r.id);
-    return list.objectType === "contact"
-      ? { contactIds: ids, accountIds: [] }
-      : { contactIds: [], accountIds: ids };
+    const person = await readPersonViews();
+    const view = person.find((v) => v.id === listId);
+    if (!view) {
+      // The company road, unchanged.
+      const views = await readViews("account");
+      const company = views.find((v) => v.id === listId);
+      if (!company) {
+        if (viewsAtCeiling(views)) throw viewsCeilingError("account");
+        return { contactIds: [], accountIds: [] };
+      }
+      const list = await listOf(company, "account");
+      if (!list) return { contactIds: [], accountIds: [] };
+      const records = await findAll<{ id: string }>("account", membershipFilter(list.slug), limit, "person");
+      return { contactIds: [], accountIds: records.map((r) => r.id) };
+    }
+    const labels = await personLabels(person);
+    if (!isListedViewType(view.type) || renderViewName(view.name, labels) === null) {
+      throw refusal(twentyMcpError, -32603, "view-not-listed", `view ${view.id} is not a people list Twenty's view picker shows`);
+    }
+    // F1: the filters judged.
+    const f1 = await viewFilters(view.id);
+    const fieldTypes = new Map<string, string>();
+    const dependence = await viewerDependence(f1, async (fieldMetadataId: string) => {
+      const known = fieldTypes.get(fieldMetadataId);
+      if (known !== undefined) return known;
+      const field = readOneById<{ id: string; type: string }>(
+        "get_field_metadata",
+        await callTool("get_field_metadata", getFieldMetadataByIdArgs(fieldMetadataId), "person"),
+        fieldMetadataId,
+        twentyMcpError,
+      );
+      fieldTypes.set(fieldMetadataId, field.type);
+      return field.type;
+    });
+    if (dependence) {
+      throw refusal(
+        twentyMcpError,
+        -32603,
+        dependence.key,
+        `view ${view.id} ("${view.name}"), filter ${dependence.filterId}: ${dependence.detail}; its members depend on who views it`,
+      );
+    }
+    // Q1: the view's own filter, as Twenty computes it.
+    const q1 = readViewQuery(
+      await callTool("get_view_query_parameters", getViewQueryParametersArgs(view.id), "person"),
+      twentyMcpError,
+    );
+    if (q1.objectNameSingular !== OBJECTS.contact.nameSingular) {
+      throw refusal(twentyMcpError, -32603, "view-object-mismatch", `view ${view.id} is a view of ${q1.objectNameSingular}, not person`);
+    }
+    if (!isListedViewType(q1.viewType)) {
+      throw refusal(twentyMcpError, -32603, "view-type-mismatch", `view ${view.id} is a ${q1.viewType} view`);
+    }
+    // F2: a filter change still visible now refuses.
+    const f2 = await viewFilters(view.id);
+    if (canonicalJson(byId(f1)) !== canonicalJson(byId(f2))) {
+      throw refusal(twentyMcpError, -32603, "view-changed-during-read", `the filters of view ${view.id} changed during the read`);
+    }
+    const filter = memberFindFilter(q1.filter, twentyMcpError);
+    const ids = await readMemberIds(
+      (page: { limit: number; offset: number }) => findPage<{ id: string }>("contact", filter, page, "person"),
+      { want: limit ?? Number.POSITIVE_INFINITY, toolName: OBJECTS.contact.find, makeError: twentyMcpError },
+    );
+    return { contactIds: ids, accountIds: [] };
   },
 
   async addListMember({ listId, objectId, objectType }: CrmListMembership): Promise<void> {
@@ -379,13 +495,14 @@ export const twentyConnector: CrmConnector = {
     if (list.objectType !== objectType) {
       throw new TwentyMcpError(-32602, `list ${listId} holds ${list.objectType} records, not ${objectType} records`);
     }
-    const record = await findOne<Record<string, unknown>>(objectType, objectId);
+    if (list.slug === "") throw listWithoutSlugError(listId);
+    const record = await findOne<Record<string, unknown>>(objectType, objectId, "person");
     if (!record) {
       throw new TwentyMcpError(-32602, `${objectType} ${objectId} not found`);
     }
     const next = slugsWith(readListSlugs(OBJECTS[objectType].findOne, record, twentyMcpError), list.slug);
     if (!next) return;
-    await writeRecord(OBJECTS[objectType].update, membershipUpdateArgs(objectId, next));
+    await writeRecord(OBJECTS[objectType].update, membershipUpdateArgs(objectId, next), "person");
   },
 
   async removeListMember({ listId, objectId, objectType }: CrmListMembership): Promise<void> {
@@ -394,16 +511,17 @@ export const twentyConnector: CrmConnector = {
     if (list.objectType !== objectType) {
       throw new TwentyMcpError(-32602, `list ${listId} holds ${list.objectType} records, not ${objectType} records`);
     }
-    const record = await findOne<Record<string, unknown>>(objectType, objectId);
+    if (list.slug === "") throw listWithoutSlugError(listId);
+    const record = await findOne<Record<string, unknown>>(objectType, objectId, "person");
     if (!record) return;
     const next = slugsWithout(readListSlugs(OBJECTS[objectType].findOne, record, twentyMcpError), list.slug);
     if (!next) return;
-    await writeRecord(OBJECTS[objectType].update, membershipUpdateArgs(objectId, next));
+    await writeRecord(OBJECTS[objectType].update, membershipUpdateArgs(objectId, next), "person");
   },
 };
 
 // ---------------------------------------------------------------------------
-// List helpers
+// List helpers (every call in person mode: the list methods run for the person running them)
 // ---------------------------------------------------------------------------
 
 /** The error of a read that needs every view of an object when get_views answered its ceiling. */
@@ -415,21 +533,152 @@ function viewsCeilingError(objectType: RecordType): TwentyMcpError {
   );
 }
 
+function listWithoutSlugError(listId: string): TwentyMcpError {
+  return refusal(
+    twentyMcpError,
+    -32602,
+    "list-without-slug",
+    `list ${listId} is a people view without an inLists tag, so it has no tag to write`,
+  ) as TwentyMcpError;
+}
+
+function byId<T extends { id: string }>(entries: T[]): T[] {
+  return [...entries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 async function readViews(objectType: RecordType): Promise<TwentyView[]> {
   return readArrayAnswer<TwentyView>(
     "get_views",
-    await callTool("get_views", getViewsArgs(objectType)),
+    await callTool("get_views", getViewsArgs(objectType), "person"),
     twentyMcpError,
   );
 }
 
-/** The list a view is, or null when the view carries no `inLists CONTAINS` filter. */
+async function viewFilters(viewId: string) {
+  return readViewFilters(await callTool("get_view_filters", getViewFiltersArgs(viewId), "person"), viewId, twentyMcpError);
+}
+
+function viewObjectMismatch(detail: string): TwentyMcpError {
+  return refusal(twentyMcpError, -32603, "view-object-mismatch", detail) as TwentyMcpError;
+}
+
+/** The one distinct objectMetadataId of a views answer, or null for an empty answer; more than one refuses. */
+function viewsObjectId(views: TwentyView[]): string | null {
+  const ids = [...new Set(views.map((v) => v.objectMetadataId))];
+  if (ids.length > 1) throw viewMismatchOf(ids);
+  return ids[0] ?? null;
+}
+
+function viewMismatchOf(ids: string[]): TwentyMcpError {
+  return viewObjectMismatch(`the person views answer names ${ids.length} objects (${ids.join(", ")})`);
+}
+
+/**
+ * The complete person view list (S12a). get_views answers at most VIEWS_LIMIT views and has no offset; below
+ * that the answer is complete and no other call is made. At the ceiling, Twenty's REST metadata API lists every
+ * view of the object with no limit; that answer must name the same object and hold every view get_views gave.
+ */
+async function readPersonViews(): Promise<TwentyView[]> {
+  const views = await readViews("contact");
+  if (!viewsAtCeiling(views)) return views;
+  const objectId = viewsObjectId(views) as string;
+  const { status, body } = await getTwentyRest(
+    `/rest/metadata/views?objectMetadataId=${encodeURIComponent(objectId)}`,
+    "person",
+  );
+  if (!Array.isArray(body)) {
+    throw refusal(
+      twentyMcpError,
+      -32603,
+      "views-rest-failed",
+      `the REST views answer (HTTP ${status}) is not a JSON array`,
+    );
+  }
+  const all = readEntries<TwentyView>("get_views", body, "view", twentyMcpError);
+  for (const v of all) {
+    if (v.objectMetadataId !== objectId) {
+      throw viewObjectMismatch(`the REST views answer holds view ${v.id} of object ${v.objectMetadataId}, not ${objectId}`);
+    }
+  }
+  const restIds = new Set(all.map((v) => v.id));
+  const missing = views.find((v) => !restIds.has(v.id));
+  if (missing) {
+    throw refusal(
+      twentyMcpError,
+      -32603,
+      "view-changed-during-read",
+      `view ${missing.id} of the get_views answer is not in the REST views answer`,
+    );
+  }
+  return all;
+}
+
+/** The person-object rule: the labels of the one object of a person views answer (none for an empty answer). */
+async function personLabels(views: TwentyView[]): Promise<ViewLabels | null> {
+  const objectId = viewsObjectId(views);
+  if (objectId === null) return null;
+  const object = readOneById<{ id: string; nameSingular: string; labelSingular: string; labelPlural: string }>(
+    "get_object_metadata",
+    await callTool("get_object_metadata", getObjectMetadataByIdArgs(objectId), "person"),
+    objectId,
+    twentyMcpError,
+  );
+  if (object.nameSingular !== OBJECTS.contact.nameSingular) {
+    throw viewObjectMismatch(`the person views name object ${objectId}, which is ${object.nameSingular}, not person`);
+  }
+  return { labelSingular: object.labelSingular, labelPlural: object.labelPlural };
+}
+
+/** The slug of a person view: its `inLists CONTAINS` tag when the field is provisioned (`fieldId`), else "". */
+async function personSlugOf(viewId: string, fieldId: string | null): Promise<string> {
+  if (!fieldId) return "";
+  return readListSlug(await viewFilters(viewId), fieldId, twentyMcpError) ?? "";
+}
+
+/** The name a person view is listed under, or null when it is not a listed type or renders no name. */
+function personListName(view: TwentyView, labels: ViewLabels | null): string | null {
+  if (!isListedViewType(view.type)) return null;
+  return renderViewName(view.name, labels);
+}
+
+/** The list a person view is, or null when it is not a listed type or renders no name. */
+async function personListOf(view: TwentyView, labels: ViewLabels | null): Promise<CrmList | null> {
+  const name = personListName(view, labels);
+  if (name === null) return null;
+  return { id: view.id, slug: await personSlugOf(view.id, await listFieldId("contact")), name, objectType: "contact" };
+}
+
+/**
+ * Every people list whose rendered name holds `lowered` (all of them for ""), in get_views order (S12): the
+ * listed types, then the rendered names, then the query; the slug is read last, only for the views kept, under
+ * one read of the list field's id.
+ */
+async function personLists(lowered: string): Promise<CrmList[]> {
+  const views = await readPersonViews();
+  const labels = await personLabels(views);
+  const kept: { view: TwentyView; name: string }[] = [];
+  for (const view of views) {
+    const name = personListName(view, labels);
+    if (name === null) continue;
+    if (lowered && !name.toLowerCase().includes(lowered)) continue;
+    kept.push({ view, name });
+  }
+  if (kept.length === 0) return [];
+  const fieldId = await listFieldId("contact");
+  const out: CrmList[] = [];
+  for (const { view, name } of kept) {
+    out.push({ id: view.id, slug: await personSlugOf(view.id, fieldId), name, objectType: "contact" });
+  }
+  return out;
+}
+
+/** The company list a view is, or null when the view carries no `inLists CONTAINS` filter. */
 async function listOf(view: TwentyView, objectType: RecordType): Promise<CrmList | null> {
   const fieldId = await listFieldId(objectType);
   if (!fieldId) return null;
   const filters = readArrayAnswer(
     "get_view_filters",
-    await callTool("get_view_filters", getViewFiltersArgs(view.id)),
+    await callTool("get_view_filters", getViewFiltersArgs(view.id), "person"),
     twentyMcpError,
   );
   const slug = readListSlug(filters, fieldId, twentyMcpError);
@@ -450,7 +699,7 @@ async function listFieldId(objectType: RecordType): Promise<string | null> {
     objectIds = readObjectIds(
       readArrayAnswer(
         "get_object_metadata",
-        await callTool("get_object_metadata", getObjectMetadataArgs()),
+        await callTool("get_object_metadata", getObjectMetadataArgs(), "person"),
         twentyMcpError,
       ),
       twentyMcpError,
@@ -459,14 +708,21 @@ async function listFieldId(objectType: RecordType): Promise<string | null> {
       throw new TwentyMcpError(-32603, "Twenty object metadata names no person and company objects");
     }
   }
-  const fieldId = readListFieldId(
-    readArrayAnswer(
-      "get_field_metadata",
-      await callTool("get_field_metadata", getFieldMetadataArgs(objectIds[objectType])),
-      twentyMcpError,
-    ),
+  const fields = readArrayAnswer(
+    "get_field_metadata",
+    await callTool("get_field_metadata", getFieldMetadataArgs(objectIds[objectType]), "person"),
     twentyMcpError,
   );
+  // An answer at Twenty's ceiling may leave the field out: a null id must mean "not provisioned".
+  if (fields.length >= FIELD_METADATA_LIMIT) {
+    throw refusal(
+      twentyMcpError,
+      -32603,
+      "list-field-at-ceiling",
+      `get_field_metadata answered ${fields.length} ${OBJECTS[objectType].nameSingular} fields, its ceiling of ${FIELD_METADATA_LIMIT}`,
+    );
+  }
+  const fieldId = readListFieldId(fields, twentyMcpError);
   if (fieldId) listFieldIds[objectType] = fieldId;
   return fieldId;
 }

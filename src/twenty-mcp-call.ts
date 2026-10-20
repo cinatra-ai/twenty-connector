@@ -26,6 +26,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { getTwentyDeps, type ExternalMcpServerRecordShape } from "./deps";
+import { twentyRestBaseOf } from "./dev-setup";
 import { readEntries, readToolOutput as readContractToolOutput } from "./twenty-tool-contract.mjs";
 
 export const TWENTY_WORKSPACE_ROW_ID = "twenty-workspace";
@@ -74,6 +75,37 @@ type ToolsCallResult = {
 };
 
 /**
+ * Whose decision a call's bearer is minted under. "worker": the host's worker
+ * gate, today's call `resolveBearer(row)` byte for byte. "person": the list
+ * methods (cinatra#3562, R66): `resolveBearer(row, { forPerson: true })`, which
+ * the host decides for the person running the step, on the connection as
+ * shared with them, and refuses by name. An older host ignores the second
+ * argument, so the call then takes the worker gate.
+ */
+export type TwentyCallMode = "worker" | "person";
+
+/** The live, enabled Twenty row, or a TwentyConfigError. */
+function liveTwentyRow(): ExternalMcpServerRecordShape {
+  const row = getTwentyRow();
+  if (!row) {
+    throw new TwentyConfigError(
+      "Twenty workspace row not configured — run the dev-auto-setup hook or call `setup-page` to register one.",
+    );
+  }
+  if (!row.enabled) {
+    throw new TwentyConfigError(`Twenty workspace row ${row.id} is disabled.`);
+  }
+  return row;
+}
+
+/** The bearer of one call under its mode. The host's refusals pass through unchanged (no catch). */
+async function bearerFor(row: ExternalMcpServerRecordShape, mode: TwentyCallMode): Promise<string | null> {
+  return mode === "person"
+    ? getTwentyDeps().resolveBearer(row, { forPerson: true })
+    : getTwentyDeps().resolveBearer(row);
+}
+
+/**
  * Call `tools/call name=execute_tool` against the live Twenty MCP server.
  *
  * Returns the JSON-RPC `result`. Twenty catalog tools return a single
@@ -86,18 +118,11 @@ type ToolsCallResult = {
 export async function executeTwentyMcpTool(
   toolName: string,
   toolArguments: Record<string, unknown>,
+  mode: TwentyCallMode = "worker",
 ): Promise<ToolsCallResult> {
-  const row = getTwentyRow();
-  if (!row) {
-    throw new TwentyConfigError(
-      "Twenty workspace row not configured — run the dev-auto-setup hook or call `setup-page` to register one.",
-    );
-  }
-  if (!row.enabled) {
-    throw new TwentyConfigError(`Twenty workspace row ${row.id} is disabled.`);
-  }
+  const row = liveTwentyRow();
 
-  const bearer = await getTwentyDeps().resolveBearer(row);
+  const bearer = await bearerFor(row, mode);
   const headers: Record<string, string> = {
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
@@ -168,6 +193,55 @@ export async function executeTwentyMcpTool(
     );
   }
   return parsed.result;
+}
+
+/**
+ * GET one path of the Twenty REST API of the live row (cinatra#3562 S12a: the
+ * metadata views list, which has no ceiling). The row and its bearer are taken
+ * exactly as `executeTwentyMcpTool` takes them. The REST base is the row's MCP
+ * address without its one trailing `/mcp`, under the connector's own address
+ * rule (twentyRestBaseOf); a row whose address does not end in `/mcp`, or that
+ * the rule refuses, throws `views-rest-base-unknown`. A fetch failure, a non-2xx
+ * status or a body that is not JSON throws `views-rest-failed`; it is never read
+ * as empty. Returns the HTTP status and the parsed JSON body, so a caller that
+ * refuses the body's shape can name the status.
+ */
+export async function getTwentyRest(
+  path: string,
+  mode: TwentyCallMode = "worker",
+): Promise<{ status: number; body: unknown }> {
+  const row = liveTwentyRow();
+  let base: string;
+  try {
+    const trimmed = String(row.serverUrl ?? "").trim().replace(/\/+$/, "");
+    if (!/\/mcp$/i.test(trimmed)) throw new Error("no trailing /mcp");
+    base = twentyRestBaseOf(row.serverUrl);
+  } catch {
+    throw new TwentyMcpError(
+      -32603,
+      `twenty-connector: views-rest-base-unknown: the REST base of Twenty row ${row.id} cannot be derived from its MCP address`,
+    );
+  }
+  const bearer = await bearerFor(row, mode);
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (bearer) headers.authorization = `Bearer ${bearer}`;
+  let response: Response;
+  try {
+    response = await fetch(`${base}${path}`, { method: "GET", headers });
+  } catch (err) {
+    throw new TwentyMcpError(
+      -32603,
+      `twenty-connector: views-rest-failed: the request failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!response.ok) {
+    throw new TwentyMcpError(-32603, `twenty-connector: views-rest-failed: upstream HTTP ${response.status}`);
+  }
+  try {
+    return { status: response.status, body: JSON.parse(await response.text()) };
+  } catch {
+    throw new TwentyMcpError(-32603, `twenty-connector: views-rest-failed: the answer (HTTP ${response.status}) is not JSON`);
+  }
 }
 
 /**

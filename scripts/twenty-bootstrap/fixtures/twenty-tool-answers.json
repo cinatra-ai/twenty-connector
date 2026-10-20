@@ -409,8 +409,8 @@
           "fieldMetadataId": "<uuid>",
           "id": "<uuid>",
           "operand": "CONTAINS",
-          "positionInViewFilterGroup": "<null>",
-          "subFieldName": "<null>",
+          "positionInViewFilterGroup": null,
+          "subFieldName": null,
           "value": "cinatra-proof-list-<ns>",
           "viewId": "<string>"
         }

@@ -40,8 +40,8 @@ function fakeTwenty({ existing = [], answer } = {}) {
     if (own !== undefined) return result(own);
     if (toolName === "get_object_metadata") {
       return result([
-        { id: PERSON, nameSingular: "person", namePlural: "people" },
-        { id: COMPANY, nameSingular: "company", namePlural: "companies" },
+        { id: PERSON, nameSingular: "person", namePlural: "people", labelSingular: "Person", labelPlural: "People" },
+        { id: COMPANY, nameSingular: "company", namePlural: "companies", labelSingular: "Company", labelPlural: "Companies" },
       ]);
     }
     if (toolName === "get_field_metadata") return result(fields[args.objectMetadataId].map((f) => ({ ...f })));
@@ -187,7 +187,7 @@ describe("mcpToolSender: one execute_tool request per call, the key as the beare
   }
 
   it("posts execute_tool with the key as the bearer and resolves to the JSON-RPC result, JSON or SSE", async () => {
-    const res = result([{ id: PERSON, nameSingular: "person" }]);
+    const res = result([{ id: PERSON, nameSingular: "person", labelSingular: "Person", labelPlural: "People" }]);
     for (const [body, contentType] of [
       [JSON.stringify({ jsonrpc: "2.0", id: 1, result: res }), "application/json"],
       [`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result: res })}\n\n`, "text/event-stream"],

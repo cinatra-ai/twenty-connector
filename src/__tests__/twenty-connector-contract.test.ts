@@ -12,10 +12,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const exec = vi.hoisted(() => vi.fn());
+// Twenty's REST metadata read of every view of an object (cinatra#3562 S12a), replaced like the tool transport.
+const rest = vi.hoisted(() => vi.fn());
 
 vi.mock("../twenty-mcp-call", async (importOriginal) => {
   const actual: any = await importOriginal();
-  return { ...actual, executeTwentyMcpTool: exec };
+  return { ...actual, executeTwentyMcpTool: exec, getTwentyRest: rest };
 });
 
 // The committed fixtures, loaded through the test runner (a JSON module; the specifier stays a plain string).
@@ -59,10 +61,14 @@ function fakeTwenty() {
     for (const [key, cond] of Object.entries<any>(filter)) {
       if (key === "or") {
         if (!cond.some((f: any) => matches(rec, f))) return false;
+      } else if (key === "and") {
+        if (!cond.every((f: any) => matches(rec, f))) return false;
       } else if (key === "inLists") {
-        const want = String(cond.containsIlike ?? "").toLowerCase();
         if (!("containsIlike" in cond)) throw new Error(`Operator "${Object.keys(cond)[0]}" is not supported`);
-        if (!(rec.inLists ?? []).some((e: string) => e.toLowerCase() === want)) return false;
+        // ILIKE on each element: `%` matches any run of characters, the rest is literal and case-blind.
+        const esc = (part: string) => part.replace(/[.*+?^$()|[\]\\{}]/g, "\\$&");
+        const like = new RegExp("^" + String(cond.containsIlike ?? "").split("%").map(esc).join(".*") + "$", "i");
+        if (!(rec.inLists ?? []).some((e: string) => like.test(e))) return false;
       } else if (key === "id") {
         if (rec.id !== cond.eq) return false;
       } else if (key === "emails") {
@@ -87,32 +93,55 @@ function fakeTwenty() {
     return tool in state.oddEntry && Array.isArray(out) ? [state.oddEntry[tool], ...out] : out;
   }
 
+  function objects() {
+    return [
+      { id: "obj-opportunity", nameSingular: "opportunity", labelSingular: "Opportunity", labelPlural: "Opportunities" },
+      { id: OBJ.person, nameSingular: "person", labelSingular: "Person", labelPlural: "People" },
+      { id: OBJ.company, nameSingular: "company", labelSingular: "Company", labelPlural: "Companies" },
+    ];
+  }
+  function fieldsOf(obj: "person" | "company") {
+    return [{ id: `fld-${obj}-name`, name: "name", type: "FULL_NAME" }, { id: FIELD[obj], name: "inLists", type: "ARRAY" }];
+  }
+  /** A view as get_views and the REST metadata read answer it. */
+  function viewOut(v: any) {
+    return { id: v.id, name: v.name, objectMetadataId: v.objectMetadataId, type: v.type ?? "TABLE" };
+  }
+
   function answerOf(tool: string, args: any): any {
     if (state.fail[tool]) return failed(tool, state.fail[tool]);
     if (tool === "get_object_metadata") {
-      return [
-        { id: "obj-opportunity", nameSingular: "opportunity" },
-        { id: OBJ.person, nameSingular: "person" },
-        { id: OBJ.company, nameSingular: "company" },
-      ];
+      // By id (`{ id, limit: 1 }`) Twenty answers that one object; without, every object.
+      return args?.id ? objects().filter((o) => o.id === args.id) : objects();
     }
     if (tool === "get_field_metadata") {
-      const obj = args.objectMetadataId === OBJ.person ? "person" : "company";
-      return [{ id: `fld-${obj}-name`, name: "name", type: "FULL_NAME" }, { id: FIELD[obj], name: "inLists", type: "ARRAY" }];
+      const all = [...fieldsOf("person"), ...fieldsOf("company")];
+      if (args.id) return all.filter((f) => f.id === args.id);
+      return fieldsOf(args.objectMetadataId === OBJ.person ? "person" : "company");
+    }
+    if (tool === "get_view_query_parameters") {
+      // The view's own filter as Twenty computes it: `inLists CONTAINS <slug>` becomes `{ inLists: { containsIlike: "%<slug>%" } }` (S15).
+      const view = state.views.find((v: any) => v.id === args.viewId);
+      if (!view) return failed(tool, `View ${args.viewId} not found`);
+      const parts = state.filters
+        .filter((f: any) => f.viewId === view.id && f.operand === "CONTAINS" && Object.values(FIELD).includes(f.fieldMetadataId))
+        .map((f: any) => ({ inLists: { containsIlike: `%${f.value}%` } }));
+      const objectNameSingular = Object.keys(OBJ).find((k) => OBJ[k] === view.objectMetadataId);
+      return { objectNameSingular, filter: parts.length === 0 ? {} : parts.length === 1 ? parts[0] : { and: parts }, orderBy: [], viewName: view.name, viewType: view.type ?? "TABLE" };
     }
     if (tool === "get_views") {
       const objId = args.objectNameSingular ? OBJ[args.objectNameSingular] : null;
       return state.views
         .filter((v: any) => !objId || v.objectMetadataId === objId)
         .slice(0, args.limit ?? 50)
-        .map((v: any) => ({ id: v.id, name: v.name, objectMetadataId: v.objectMetadataId, type: "TABLE" }));
+        .map(viewOut);
     }
     if (tool === "get_view_filters") return state.filters.filter((f: any) => f.viewId === args.viewId);
     if (tool === "create_view") {
       if (!OBJ[args.objectNameSingular]) {
         return failed(tool, `Object "${args.objectNameSingular}" not found. Use get_object_metadata to list available objects.`);
       }
-      const view = { id: nextId("view"), name: args.name, objectMetadataId: OBJ[args.objectNameSingular] };
+      const view = { id: nextId("view"), name: args.name, objectMetadataId: OBJ[args.objectNameSingular], type: args.type };
       state.views.push(view);
       return { id: view.id, name: view.name, objectNameSingular: args.objectNameSingular, type: args.type, icon: "IconList", visibility: "WORKSPACE" };
     }
@@ -155,6 +184,12 @@ function fakeTwenty() {
     return failed(tool, `Tool "${tool}" not found`);
   }
 
+  // GET /rest/metadata/views?objectMetadataId=<id>: every view of that object, with no limit.
+  rest.mockImplementation(async (path: string) => {
+    const objectId = decodeURIComponent(String(path).split("objectMetadataId=")[1] ?? "");
+    return { status: 200, body: state.views.filter((v: any) => v.objectMetadataId === objectId).map(viewOut) };
+  });
+
   exec.mockImplementation(async (tool: string, args: any) => ({
     content: [{ type: "text", text: JSON.stringify(answer(tool, args)) }],
     isError: false,
@@ -172,8 +207,8 @@ function fakeTwenty() {
       state.company.push(rec);
       return rec.id;
     },
-    addView(obj: "person" | "company", name: string, slug?: string) {
-      const view = { id: nextId("view"), name, objectMetadataId: OBJ[obj] };
+    addView(obj: "person" | "company", name: string, slug?: string, type = "TABLE") {
+      const view = { id: nextId("view"), name, objectMetadataId: OBJ[obj], type };
       state.views.push(view);
       if (slug) state.filters.push({ id: nextId("filter"), viewId: view.id, fieldMetadataId: FIELD[obj], operand: "CONTAINS", value: slug });
       return view.id;
@@ -191,6 +226,7 @@ async function load(): Promise<any> {
 beforeEach(() => {
   vi.resetModules();
   exec.mockReset();
+  rest.mockReset();
 });
 
 describe("the fake Twenty answers in the recorded shapes", () => {
@@ -223,7 +259,7 @@ describe("getListMembers", () => {
     expect([...out.contactIds].sort()).toEqual([a, b, c].sort());
     for (const args of t.calls("find_people")) {
       expect(args).not.toHaveProperty("filter");
-      expect(args.inLists).toEqual({ containsIlike: "leaders" });
+      expect(args.and).toEqual([{ inLists: { containsIlike: "%leaders%" } }]);
       expect(args.limit).toBeLessThanOrEqual(100);
     }
   });
@@ -251,7 +287,7 @@ describe("getListMembers", () => {
     const out = await (await load()).getListMembers({ listId });
     expect(out.contactIds).toHaveLength(230);
     expect(new Set(out.contactIds)).toEqual(new Set(ids));
-    expect(t.calls("find_people").map((a: any) => [a.limit, a.offset ?? 0])).toEqual([[100, 0], [100, 100], [100, 200]]);
+    expect(t.calls("find_people").map((a: any) => [a.limit, a.offset ?? 0])).toEqual([[100, 0], [100, 100], [30, 200], [100, 0], [100, 100], [30, 200]]);
   });
 
   it("a requested limit above one call is met by paging", async () => {
@@ -275,9 +311,9 @@ describe("lists are views carrying an inLists filter", () => {
   it("searchLists reads get_views' bare array and the slug from each view's filter, never from its name", async () => {
     const t = fakeTwenty();
     const listId = t.addView("person", "Renamed Leaders", "leaders");
-    t.addView("person", "All People");
+    const plainId = t.addView("person", "All People");
     const out = await (await load()).searchLists({ query: "", objectType: "contact" });
-    expect(out).toEqual([{ id: listId, slug: "leaders", name: "Renamed Leaders", objectType: "contact" }]);
+    expect(out).toEqual([{ id: listId, slug: "leaders", name: "Renamed Leaders", objectType: "contact" }, { id: plainId, slug: "", name: "All People", objectType: "contact" }]);
     expect(t.calls("get_views")[0]).toEqual({ objectNameSingular: "person", limit: 100 });
   });
 
@@ -286,12 +322,12 @@ describe("lists are views carrying an inLists filter", () => {
     // `Person Record Page Fields` (a record-page field view; here with a filter on another field whose value reads
     // like a slug); only a view filtered on inLists is a list, and its name is the name the list was created with.
     const t = fakeTwenty();
-    t.addView("person", "All {objectLabelPlural}");
-    const pageView = t.addView("person", "Person Record Page Fields");
+    const allId = t.addView("person", "All {objectLabelPlural}");
+    const pageView = t.addView("person", "Person Record Page Fields", undefined, "FIELDS_WIDGET");
     t.state.filters.push({ id: "filter-page", viewId: pageView, fieldMetadataId: "fld-person-name", operand: "CONTAINS", value: "leaders" });
     const listId = t.addView("person", "Q4 Leaders", "q4-leaders");
     const out = await (await load()).searchLists({ query: "", objectType: "contact" });
-    expect(out).toEqual([{ id: listId, slug: "q4-leaders", name: "Q4 Leaders", objectType: "contact" }]);
+    expect(out).toEqual([{ id: allId, slug: "", name: "All People", objectType: "contact" }, { id: listId, slug: "q4-leaders", name: "Q4 Leaders", objectType: "contact" }]);
     expect(out.some((l: any) => /[{}]/.test(l.name) || l.name === "Person Record Page Fields")).toBe(false);
   });
 
@@ -314,13 +350,13 @@ describe("lists are views carrying an inLists filter", () => {
     expect(await (await load()).getList({ id: list.id })).toEqual(list);
   });
 
-  it("getList fails closed when the list is not among a get_views answer of 100 views (the tool's ceiling)", async () => {
+  it("getList at a get_views answer of 100 person views reads the complete list (REST) and answers null for a list that is not there", async () => {
     const t = fakeTwenty();
     for (let i = 0; i < 99; i++) t.addView("person", `View ${i}`);
     const listId = t.addView("person", "Hundredth", "hundredth");
     const connector = await load();
     expect(await connector.getList({ id: listId })).toEqual({ id: listId, slug: "hundredth", name: "Hundredth", objectType: "contact" });
-    await expect(connector.getList({ id: "view-not-there" })).rejects.toThrow(/100 person views, the ceiling of Twenty's get_views/);
+    expect(await connector.getList({ id: "view-not-there" })).toBeNull();
   });
 
   it("getList with 99 views answers null for a list that is not there", async () => {
@@ -329,17 +365,20 @@ describe("lists are views carrying an inLists filter", () => {
     expect(await (await load()).getList({ id: "view-not-there" })).toBeNull();
   });
 
-  it("searchLists fails closed on a get_views answer of 100 views and reads 99 views as before", async () => {
+  it("searchLists reads 99 person views as before and a get_views answer of 100 completely (REST)", async () => {
     const t = fakeTwenty();
-    for (let i = 0; i < 98; i++) t.addView("person", `View ${i}`);
+    const plain: string[] = [];
+    for (let i = 0; i < 98; i++) plain.push(t.addView("person", `View ${i}`));
     const listId = t.addView("person", "Leaders", "leaders");
     const connector = await load();
+    const asList = (id: string, i: number) => ({ id, slug: "", name: `View ${i}`, objectType: "contact" });
     expect(await connector.searchLists({ query: "", objectType: "contact" })).toEqual([
-      { id: listId, slug: "leaders", name: "Leaders", objectType: "contact" },
+      ...plain.map(asList), { id: listId, slug: "leaders", name: "Leaders", objectType: "contact" },
     ]);
-    t.addView("person", "View 99");
-    await expect(connector.searchLists({ query: "", objectType: "contact" })).rejects.toThrow(
-      /100 person views, the ceiling of Twenty's get_views/,
+    expect(rest).not.toHaveBeenCalled();
+    const lastId = t.addView("person", "View 99");
+    expect(await connector.searchLists({ query: "", objectType: "contact" })).toEqual(
+      [...plain.map(asList), { id: listId, slug: "leaders", name: "Leaders", objectType: "contact" }, asList(lastId, 99)],
     );
   });
 

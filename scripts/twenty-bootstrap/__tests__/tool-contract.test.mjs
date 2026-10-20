@@ -265,9 +265,13 @@ describe("the reader census: every exported reader checks what it reads against 
     links,
     "written answer": { success: true, result: { id: "w-1" } },
     written: { id: "w-1" },
-    view: { id: "v-1", name: "Leaders" },
-    "view filter": { id: "f-1", fieldMetadataId: "fm-1", operand: "CONTAINS", value: "a-1" },
-    object: { id: "o-1", nameSingular: "person" },
+    view: { id: "v-1", name: "Leaders", type: "TABLE", objectMetadataId: "o-1" },
+    "view filter": {
+      id: "f-1", viewId: "v-1", fieldMetadataId: "fm-1", operand: "CONTAINS", value: "a-1", subFieldName: "primaryEmail",
+      positionInViewFilterGroup: 0,
+    },
+    "view query": { objectNameSingular: "person", filter: { jobTitle: { eq: "Lead" } }, viewType: "TABLE" },
+    object: { id: "o-1", nameSingular: "person", labelSingular: "Person", labelPlural: "People" },
     field: { id: "fd-1", name: "inLists", type: "ARRAY", isActive: true },
     "created view": { id: "v-1", name: "Leaders" },
     "created view filter": { id: "f-1", fieldMetadataId: "fm-1", operand: "CONTAINS" },
@@ -332,7 +336,27 @@ describe("the reader census: every exported reader checks what it reads against 
     readListFieldId: [{ tool: "get_field_metadata", type: "@field[]", where: "answer", ret: "id",
       call: (v) => contract.readListFieldId(v, mk) }],
     readObjectIds: [{ tool: "get_object_metadata", type: "@object[]", where: "answer", ret: "@object ids",
-      input: [clone(VALID.object), { id: "o-2", nameSingular: "company" }], call: (v) => contract.readObjectIds(v, mk) }],
+      input: [clone(VALID.object), { id: "o-2", nameSingular: "company", labelSingular: "Company", labelPlural: "Companies" }],
+      call: (v) => contract.readObjectIds(v, mk) }],
+    // cinatra#3562 S5: one metadata entry read by its id (getObjectMetadataByIdArgs / getFieldMetadataByIdArgs).
+    readOneById: [
+      { tool: "get_object_metadata", type: "@object[]", where: "answer", ret: "@object",
+        call: (v) => contract.readOneById("get_object_metadata", v, "o-1", mk) },
+      { tool: "get_field_metadata", type: "@field[]", where: "answer", ret: "@field",
+        call: (v) => contract.readOneById("get_field_metadata", v, "fd-1", mk) },
+    ],
+    // cinatra#3562 S5: the filters of one view, every entry of the requested view.
+    readViewFilters: [{ tool: "get_view_filters", type: "@view filter[]", where: "answer", ret: "@view filter[]",
+      call: (v) => contract.readViewFilters(v, "v-1", mk) }],
+    // cinatra#3562 S4: the view's own query.
+    readViewQuery: [{ tool: "get_view_query_parameters", type: "@view query", where: "answer", ret: "@view query",
+      call: (v) => contract.readViewQuery(v, mk) }],
+    // cinatra#3562 S10: a view's member ids, two full reads of find pages (ids distinct, or the read refuses).
+    readMemberIds: FIND_TOOLS.map((tool) => ({
+      tool, type: contract.TOOL_ANSWERS[tool].replace("answer", "page"), where: "result", ret: "strings",
+      input: contract.TOOL_ANSWERS[tool] === "@person answer" ? { records: [clone(person), { ...clone(person), id: "p-2" }], count: 2 } : undefined,
+      call: (v) => contract.readMemberIds(async () => v, { toolName: tool, makeError: mk }),
+    })),
     readListSlugs: FIND_TOOLS.filter((t) => t.startsWith("find_one_")).map((tool) => ({
       tool, type: contract.TOOL_ANSWERS[tool].replace(" answer", ""), where: "record", ret: "strings",
       call: (v) => contract.readListSlugs(tool, v, mk),
@@ -369,7 +393,7 @@ describe("the reader census: every exported reader checks what it reads against 
     return copy;
   }
   const WRONG = { id: [7, ""], string: [7], "string?": [7], number: ["3"], count: ["x", "03", -1, 1.5], true: ["yes", 1], "boolean?": ["yes"],
-    "strings?": ["a-1", [1]], "string|any": [] };
+    "strings?": ["a-1", [1]], "string|any": [], json: [null], "number?": ["3"], object: [7, "x", []] };
   async function outcome(call, input) {
     try {
       return { value: await call(input) };
@@ -393,6 +417,9 @@ describe("the reader census: every exported reader checks what it reads against 
         if (v === null && ft.endsWith("?")) return true;
         return conforms(v, ft.replace(/\?$/, ""));
       }
+      // A "json" or "object" field is the answer's whole value, returned as a deep copy (cinatra#3562 S3).
+      if (ft === "object") return isPlain(v);
+      if (ft === "json") return v !== undefined && v !== null;
       return v === null || ["string", "number", "boolean"].includes(typeof v) || conforms(v, "strings");
     });
   }
@@ -403,12 +430,16 @@ describe("the reader census: every exported reader checks what it reads against 
     }
     return set;
   }
-  function withExtras(value) {
-    // The same input with an unchecked key beside every checked one, at every depth.
-    if (Array.isArray(value)) return value.map(withExtras);
+  function withExtras(value, type) {
+    // The same input with an unchecked key beside every checked one, at every depth. The value of a "json" or
+    // "object" field is the answer's whole value (cinatra#3562 S3): it is kept as it is, never given a key.
+    if (type === "json" || type === "object") return clone(value);
+    const m = /^@(.+?)(\[\])?(\?)?$/.exec(type ?? "");
+    const fields = m && !m[2] ? contract.ENTRY_FIELDS[m[1]] : undefined;
+    if (Array.isArray(value)) return value.map((v) => withExtras(v, m && m[2] ? `@${m[1]}` : undefined));
     if (value && typeof value === "object") {
       const out = { unchecked: { leak: "unchecked-value" } };
-      for (const [k, v] of Object.entries(value)) out[k] = withExtras(v);
+      for (const [k, v] of Object.entries(value)) out[k] = withExtras(v, fields?.[k]);
       return out;
     }
     return value;
@@ -485,7 +516,7 @@ describe("the reader census: every exported reader checks what it reads against 
       });
 
       it(`${reader} (${label}): (b) returns only checked fields of its kind, never an object of the answer`, async () => {
-        const input = withExtras(inputOf(row));
+        const input = withExtras(inputOf(row), row.type);
         const { value, error } = await outcome(row.call, input);
         expect(error, `${reader} on its valid input with unchecked keys`).toBeUndefined();
         expect(conforms(value, row.ret), `${reader} returned ${JSON.stringify(value)}`).toBe(true);
@@ -517,9 +548,9 @@ describe("the reader census: every exported reader checks what it reads against 
     });
   });
 
-  it("a view filter's value is any JSON value: a string is kept, any other value is projected as null and is no list", () => {
-    const f = (value) => [{ id: "f-1", fieldMetadataId: "fm-1", operand: "CONTAINS", value }];
-    expect(contract.readArrayAnswer("get_view_filters", f({ a: 1 }))[0].value).toBeNull();
+  it("a view filter's value is any JSON value: a string is kept, any other value is returned as a copy and is no list", () => {
+    const f = (value) => [{ id: "f-1", viewId: "v-1", fieldMetadataId: "fm-1", operand: "CONTAINS", value }];
+    expect(contract.readArrayAnswer("get_view_filters", f({ a: 1 }))[0].value).toEqual({ a: 1 });
     expect(contract.readListSlug(f(["a-1"]), "fm-1")).toBeNull();
     expect(contract.readListSlug(f(7), "fm-1")).toBeNull();
     expect(contract.readListSlug(f("a-1"), "fm-1")).toBe("a-1");
@@ -743,10 +774,11 @@ describe("the proof's recorder (recordAndRead): only the reader's projection is 
 
   it("every recorded value is a checked field: an unchecked key inside an entry or a created object is its shape only, and `keep` reads projections", () => {
     const calls = [];
-    const views = [{ id: "v-1", name: "list-a", objectMetadataId: "o-1", note: NAME }, { id: "v-2", name: "list-b", note: EMAIL }];
+    const views = [{ id: "v-1", name: "list-a", type: "TABLE", objectMetadataId: "o-1", note: NAME },
+      { id: "v-2", name: "list-b", type: "TABLE", objectMetadataId: "o-1", note: EMAIL }];
     recordAndRead(calls, { id: "get_views", tool: "get_views", args: {}, result: callResult(views), own, san,
       keep: (a) => a.filter((v) => v.id === "v-1") });
-    expect(calls[0].answer).toEqual([{ id: "v-1", name: "list-a", objectMetadataId: "<string>", note: "<string>" }]);
+    expect(calls[0].answer).toEqual([{ id: "v-1", name: "list-a", type: "TABLE", objectMetadataId: "o-1", note: "<string>" }]);
     recordAndRead(calls, { id: "create_view", tool: "create_view", args: {}, result: callResult({ id: "v-3", name: "list-c", owner: { email: EMAIL } }), own, san });
     expect(calls[1].answer).toEqual({ id: "v-3", name: "list-c", owner: "<object>" });
     expect(JSON.stringify(calls)).not.toMatch(/Jordan|example\.com|list-b/);

@@ -79,8 +79,10 @@ function buildHostBoundDeps(ctx: ExtensionHostContext): TwentyConnectorHostDeps 
     getServerById: (id) => registry().getServerById(id),
     listServers: () => registry().listServers(),
     // IN-PROCESS bearer mint — trusted-path posture documented in ./deps
-    // (the minted bearer never crosses a wire boundary).
-    resolveBearer: (server) => registry().resolveBearer(server),
+    // (the minted bearer never crosses a wire boundary). The person option is
+    // forwarded only when given, so a worker call stays `resolveBearer(row)`.
+    resolveBearer: (server, opts) =>
+      opts === undefined ? registry().resolveBearer(server) : registry().resolveBearer(server, opts),
     saveTwentyConnectionAction: (formData) =>
       registry().saveTwentyConnectionAction(formData),
     disconnectTwentyConnectionAction: (formData) =>

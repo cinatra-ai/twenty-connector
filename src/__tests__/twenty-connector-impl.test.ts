@@ -16,16 +16,18 @@ vi.mock("../twenty-mcp-call", async (importOriginal) => {
 
 type Answers = Record<string, unknown | unknown[]>;
 
-/** Answer each tool with the given value (an array of `{ seq: [...] }` answers one per call, in order). */
+/** Answer each tool with the given value (an array of `{ seq: [...] }` answers one per call, in order;
+ *  a `{ byArgs: (args) => answer }` answers from the call's arguments). */
 function setupExecResult(answers: Answers) {
   const queues: Record<string, unknown[]> = {};
   for (const [tool, a] of Object.entries(answers)) {
     queues[tool] = a && typeof a === "object" && "seq" in (a as any) ? [...(a as any).seq] : [a];
   }
-  execMock.mockImplementation(async (tool: string) => {
+  execMock.mockImplementation(async (tool: string, args: any) => {
     const q = queues[tool];
     if (!q || q.length === 0) throw new Error(`unexpected call ${tool}`);
-    const answer = q.length > 1 ? q.shift() : q[0];
+    let answer: any = q.length > 1 ? q.shift() : q[0];
+    if (answer && typeof answer === "object" && "byArgs" in answer) answer = answer.byArgs(args);
     return { content: [{ type: "text", text: JSON.stringify(answer) }], isError: false };
   });
 }
@@ -37,10 +39,12 @@ const found = (records: unknown[]) => ({
   recordReferences: [],
 });
 const written = (id: string) => ({ success: true, message: "Record written", result: { id } });
-const OBJECTS = [
-  { id: "obj-person", nameSingular: "person" },
-  { id: "obj-company", nameSingular: "company" },
+const OBJECT_LIST = [
+  { id: "obj-person", nameSingular: "person", labelSingular: "Person", labelPlural: "People" },
+  { id: "obj-company", nameSingular: "company", labelSingular: "Company", labelPlural: "Companies" },
 ];
+// get_object_metadata as Twenty answers it: `{ id, limit: 1 }` reads zero or one object, `{ limit }` reads all.
+const OBJECTS = { byArgs: (args: any) => (args?.id ? OBJECT_LIST.filter((o) => o.id === args.id) : OBJECT_LIST) };
 const FIELDS = {
   seq: [[{ id: "fld-person-inlists", name: "inLists", type: "ARRAY" }], [{ id: "fld-company-inlists", name: "inLists", type: "ARRAY" }]],
 };
@@ -224,9 +228,9 @@ describe("twentyConnector — lists / Views", () => {
       get_views: {
         seq: [
           [
-            { id: "v-1", name: "Leaders", objectMetadataId: "obj-person" },
-            { id: "v-2", name: "Customers", objectMetadataId: "obj-person" },
-            { id: "v-3", name: "Internal Leaders Group", objectMetadataId: "obj-person" },
+            { id: "v-1", name: "Leaders", type: "TABLE", objectMetadataId: "obj-person" },
+            { id: "v-2", name: "Customers", type: "TABLE", objectMetadataId: "obj-person" },
+            { id: "v-3", name: "Internal Leaders Group", type: "TABLE", objectMetadataId: "obj-person" },
           ],
           [],
         ],
@@ -243,8 +247,8 @@ describe("twentyConnector — lists / Views", () => {
       get_views: {
         seq: [
           [
-            { id: "v-1", name: "Leaders", objectMetadataId: "obj-person" },
-            { id: "v-2", name: "Customers", objectMetadataId: "obj-person" },
+            { id: "v-1", name: "Leaders", type: "TABLE", objectMetadataId: "obj-person" },
+            { id: "v-2", name: "Customers", type: "TABLE", objectMetadataId: "obj-person" },
           ],
         ],
       },
@@ -258,7 +262,7 @@ describe("twentyConnector — lists / Views", () => {
   });
 
   it("getList returns null when no view matches", async () => {
-    setupExecResult({ get_views: { seq: [[{ id: "v-1", name: "Other", objectMetadataId: "obj-person" }], []] } });
+    setupExecResult({ get_views: { seq: [[{ id: "v-1", name: "Other", type: "TABLE", objectMetadataId: "obj-person" }], []] } });
     const out = await twentyConnector.getList({ id: "v-missing" });
     expect(out).toBeNull();
   });
@@ -280,20 +284,21 @@ describe("twentyConnector — lists / Views", () => {
     expect(execMock).toHaveBeenCalledWith(
       "create_view",
       expect.objectContaining({ name: "New List", objectNameSingular: "person", type: "TABLE" }),
+      "person",
     );
     expect(execMock).toHaveBeenCalledWith("create_view_filter", {
       viewId: "v-new",
       fieldMetadataId: "fld-person-inlists",
       operand: "CONTAINS",
       value: "new-list",
-    });
+    }, "person");
     expect(out.id).toBe("v-new");
     expect(out.slug).toBe("new-list");
   });
 
   it("addListMember reads current inLists + appends + writes back via update_person at top level", async () => {
     setupExecResult({
-      get_views: [{ id: "v-1", name: "Leaders", objectMetadataId: "obj-person" }],
+      get_views: [{ id: "v-1", name: "Leaders", type: "TABLE", objectMetadataId: "obj-person" }],
       get_object_metadata: OBJECTS,
       get_field_metadata: PERSON_FIELDS,
       get_view_filters: listFilter("v-1", "leaders"),
@@ -304,13 +309,13 @@ describe("twentyConnector — lists / Views", () => {
     await twentyConnector.addListMember({ listId: "v-1", objectId: "p-1", objectType: "contact" });
 
     expect(calls("update_person")).toEqual([{ id: "p-1", inLists: ["existing", "leaders"] }]);
-    expect(execMock).toHaveBeenLastCalledWith("update_person", expect.objectContaining({ id: "p-1", inLists: ["existing", "leaders"] }));
+    expect(execMock).toHaveBeenLastCalledWith("update_person", expect.objectContaining({ id: "p-1", inLists: ["existing", "leaders"] }), "person");
     expect(calls("update_person")[0]).not.toHaveProperty("input");
   });
 
   it("addListMember is a no-op when the slug is already in inLists", async () => {
     setupExecResult({
-      get_views: [{ id: "v-1", name: "Leaders", objectMetadataId: "obj-person" }],
+      get_views: [{ id: "v-1", name: "Leaders", type: "TABLE", objectMetadataId: "obj-person" }],
       get_object_metadata: OBJECTS,
       get_field_metadata: PERSON_FIELDS,
       get_view_filters: listFilter("v-1", "leaders"),
@@ -318,10 +323,12 @@ describe("twentyConnector — lists / Views", () => {
     });
 
     await twentyConnector.addListMember({ listId: "v-1", objectId: "p-1", objectType: "contact" });
-    // Exactly the reads that resolve the list and the record, and no write: get_views, get_object_metadata,
+    // Exactly the reads that resolve the list and the record, and no write: get_views, get_object_metadata
+    // (the view object's labels by id, the person-object rule), get_object_metadata (the list field's object ids),
     // get_field_metadata, get_view_filters, find_one_person.
     expect(execMock.mock.calls.map((c) => c[0])).toEqual([
       "get_views",
+      "get_object_metadata",
       "get_object_metadata",
       "get_field_metadata",
       "get_view_filters",
@@ -331,7 +338,7 @@ describe("twentyConnector — lists / Views", () => {
 
   it("removeListMember drops the slug when present", async () => {
     setupExecResult({
-      get_views: [{ id: "v-1", name: "Leaders", objectMetadataId: "obj-person" }],
+      get_views: [{ id: "v-1", name: "Leaders", type: "TABLE", objectMetadataId: "obj-person" }],
       get_object_metadata: OBJECTS,
       get_field_metadata: PERSON_FIELDS,
       get_view_filters: listFilter("v-1", "leaders"),
@@ -340,7 +347,7 @@ describe("twentyConnector — lists / Views", () => {
     });
 
     await twentyConnector.removeListMember({ listId: "v-1", objectId: "p-2", objectType: "contact" });
-    expect(execMock).toHaveBeenLastCalledWith("update_person", expect.objectContaining({ id: "p-2", inLists: ["vip"] }));
+    expect(execMock).toHaveBeenLastCalledWith("update_person", expect.objectContaining({ id: "p-2", inLists: ["vip"] }), "person");
   });
 
   it("addListMember throws when the list doesn't exist", async () => {
@@ -370,6 +377,7 @@ describe("twentyConnector — lists / Views", () => {
     expect(execMock).toHaveBeenCalledWith(
       "create_view",
       expect.objectContaining({ name: "Customers", objectNameSingular: "company", type: "TABLE" }),
+      "person",
     );
     expect(calls("create_view_filter")[0]).toMatchObject({ fieldMetadataId: "fld-company-inlists", value: "customers" });
   });
@@ -385,13 +393,15 @@ describe("twentyConnector — lists / Views", () => {
   });
 
   it("searchLists with no objectType filter fails closed when metadata cannot be loaded", async () => {
-    // get_object_metadata names no person/company object: the list field cannot be resolved for either type
-    setupExecResult({ get_object_metadata: [] });
+    // get_object_metadata names no person/company object: the list field cannot be resolved for either type.
+    // The contact half reads the person views first (S12 step 1) and has none; the company half then fails
+    // closed before it reads any company view.
+    setupExecResult({ get_object_metadata: [], get_views: [] });
 
     await expect(twentyConnector.searchLists({ query: "" })).rejects.toThrow(
       /object metadata names no person and company objects/,
     );
-    expect(calls("get_views")).toEqual([]);
+    expect(calls("get_views")).toEqual([{ objectNameSingular: "person", limit: 100 }]);
   });
 
   it("searchLists with no objectType filter reads both objects' views (metadata names the list field)", async () => {
@@ -400,8 +410,8 @@ describe("twentyConnector — lists / Views", () => {
       get_field_metadata: FIELDS,
       get_views: {
         seq: [
-          [{ id: "v-1", name: "Leaders", objectMetadataId: "obj-person" }],
-          [{ id: "v-2", name: "Customers", objectMetadataId: "obj-company" }],
+          [{ id: "v-1", name: "Leaders", type: "TABLE", objectMetadataId: "obj-person" }],
+          [{ id: "v-2", name: "Customers", type: "TABLE", objectMetadataId: "obj-company" }],
         ],
       },
       get_view_filters: { seq: [listFilter("v-1", "leaders"), listFilter("v-2", "customers", "fld-company-inlists")] },
