@@ -50,8 +50,8 @@
           "isSystem": "<boolean>",
           "isUIReadOnly": "<boolean>",
           "labelIdentifierFieldMetadataId": "<string>",
-          "labelPlural": "<string>",
-          "labelSingular": "<string>",
+          "labelPlural": "Companies",
+          "labelSingular": "Company",
           "namePlural": "<string>",
           "nameSingular": "company",
           "shortcut": "<string>",
@@ -75,8 +75,8 @@
           "isSystem": "<boolean>",
           "isUIReadOnly": "<boolean>",
           "labelIdentifierFieldMetadataId": "<string>",
-          "labelPlural": "<string>",
-          "labelSingular": "<string>",
+          "labelPlural": "People",
+          "labelSingular": "Person",
           "namePlural": "<string>",
           "nameSingular": "person",
           "shortcut": "<string>",
@@ -390,9 +390,9 @@
           "icon": "<string>",
           "id": "<uuid>",
           "name": "cinatra-proof-list-<ns>",
-          "objectMetadataId": "<string>",
+          "objectMetadataId": "<uuid>",
           "position": "<number>",
-          "type": "<string>",
+          "type": "TABLE",
           "visibility": "<string>"
         }
       ],
@@ -412,7 +412,7 @@
           "positionInViewFilterGroup": null,
           "subFieldName": null,
           "value": "cinatra-proof-list-<ns>",
-          "viewId": "<string>"
+          "viewId": "<uuid>"
         }
       ],
       "args": {
@@ -420,6 +420,24 @@
       },
       "id": "get_view_filters",
       "tool": "get_view_filters"
+    },
+    {
+      "answer": {
+        "filter": {
+          "inLists": {
+            "containsIlike": "%cinatra-proof-list-<ns>%"
+          }
+        },
+        "objectNameSingular": "person",
+        "orderBy": "<array>",
+        "viewName": "<string>",
+        "viewType": "TABLE"
+      },
+      "args": {
+        "viewId": "<uuid>"
+      },
+      "id": "get_view_query_parameters",
+      "tool": "get_view_query_parameters"
     },
     {
       "answer": {
