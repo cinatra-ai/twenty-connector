@@ -192,11 +192,12 @@ export function twentyMcpError(code: number, message: string, data?: unknown): T
  * Read the JSON-RPC response for request `requestId` from an SSE body.
  *
  * Twenty can send notifications (for example `notifications/progress`) as
- * `data:` frames before the response frame. A notification carries a `method`
- * or no `id`; it is skipped. The frame returned is the one whose `id` equals
- * the request's id and that carries `result` or `error`. When no such frame
+ * events before the response event. A notification carries a `method` or no
+ * `id`; it is skipped. The frame returned is the one whose `id` equals the
+ * request's id and that carries `result` or `error`. When no such frame
  * exists, the envelope carries neither, and the caller throws
- * "upstream returned no result".
+ * "upstream returned no result". An event whose data is not JSON throws the
+ * parse error.
  */
 export function parseSseEnvelope(
   text: string,
@@ -205,21 +206,12 @@ export function parseSseEnvelope(
   result?: ToolsCallResult;
   error?: { code: number; message: string; data?: unknown };
 } {
-  const dataLines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.startsWith("data:"))
-    .map((l) => l.slice(5).trim());
-  if (dataLines.length === 0) {
+  const events = readSseEventData(text);
+  if (events.length === 0) {
     throw new TwentyMcpError(-32603, "no SSE data line in upstream response");
   }
-  for (const line of dataLines) {
-    let frame: unknown;
-    try {
-      frame = JSON.parse(line);
-    } catch {
-      continue;
-    }
+  for (const data of events) {
+    const frame: unknown = JSON.parse(data);
     if (!frame || typeof frame !== "object" || Array.isArray(frame)) continue;
     const f = frame as {
       id?: unknown;
@@ -233,4 +225,26 @@ export function parseSseEnvelope(
     return f.error !== undefined ? { error: f.error } : { result: f.result };
   }
   return {};
+}
+
+/**
+ * Split an SSE body into the data of its events. A blank line ends an event;
+ * the `data:` lines of one event are joined with "\n"; a last event without a
+ * closing blank line still counts. An event without a `data:` line has no data
+ * and is left out.
+ */
+function readSseEventData(text: string): string[] {
+  const events: string[] = [];
+  let data: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "") {
+      if (data.length > 0) events.push(data.join("\n"));
+      data = [];
+    } else if (line.startsWith("data:")) {
+      data.push(line.slice(5).trim());
+    }
+  }
+  if (data.length > 0) events.push(data.join("\n"));
+  return events;
 }

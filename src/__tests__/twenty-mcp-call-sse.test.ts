@@ -3,7 +3,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // The transport of src/twenty-mcp-call.ts against an event-stream answer.
 // Twenty can send a `notifications/progress` frame before the JSON-RPC
 // response frame; the transport must return the frame that answers its own
-// request id, and skip notifications and answers to other ids.
+// request id, and skip notifications and answers to other ids. An event whose
+// data is not JSON fails the call with the parse error, and the `data:` lines
+// of one event are joined into one frame.
 
 import {
   registerTwentyConnector,
@@ -45,6 +47,16 @@ function answerWithFrames(frames: (requestId: string) => unknown[]) {
       .map((f) => `event: message\ndata: ${JSON.stringify(f)}\n\n`)
       .join("");
     return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** Answer the next fetch with a raw event-stream body built from the request's own id. */
+function answerWithBody(body: (requestId: string) => string) {
+  const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+    const requestId = JSON.parse(init.body).id as string;
+    return new Response(body(requestId), { status: 200, headers: { "content-type": "text/event-stream" } });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -97,5 +109,39 @@ describe("executeTwentyMcpTool reads an event-stream answer", () => {
     expect(err).toBeInstanceOf(TwentyMcpError);
     expect((err as TwentyMcpError).code).toBe(-32603);
     expect((err as TwentyMcpError).message).toBe("upstream returned no result");
+  });
+
+  it("rejects an event whose data is not JSON with the parse error", async () => {
+    answerWithBody(() => "event: message\ndata: {not json\n\n");
+    const err = await executeTwentyMcpTool("get_object_metadata", { limit: 100 }).catch((e) => e);
+    expect(err).toBeInstanceOf(SyntaxError);
+  });
+
+  it("rejects an event whose data is not JSON even when an answer frame follows", async () => {
+    answerWithBody(
+      (id) =>
+        `event: message\ndata: {not json\n\n` +
+        `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id, result: okResult })}\n\n`,
+    );
+    const err = await executeTwentyMcpTool("get_object_metadata", { limit: 100 }).catch((e) => e);
+    expect(err).toBeInstanceOf(SyntaxError);
+  });
+
+  it("joins the data lines of one event into one frame and selects it by id", async () => {
+    answerWithBody(
+      (id) =>
+        `event: message\ndata: ${JSON.stringify(progress)}\n\n` +
+        `event: message\ndata: {"jsonrpc":"2.0",\ndata: "id":${JSON.stringify(id)},"result":${JSON.stringify(okResult)}}\n\n`,
+    );
+    await expect(executeTwentyMcpTool("get_object_metadata", { limit: 100 })).resolves.toEqual(okResult);
+  });
+
+  it("reads a last event that has no closing blank line", async () => {
+    answerWithBody(
+      (id) =>
+        `event: message\ndata: ${JSON.stringify(progress)}\n\n` +
+        `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id, result: okResult })}`,
+    );
+    await expect(executeTwentyMcpTool("get_object_metadata", { limit: 100 })).resolves.toEqual(okResult);
   });
 });
