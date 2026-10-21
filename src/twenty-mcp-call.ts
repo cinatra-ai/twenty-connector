@@ -138,9 +138,11 @@ export async function executeTwentyMcpTool(
   }
 
   const contentType = response.headers.get("content-type") ?? "";
-  let parsed: { result?: ToolsCallResult; error?: { code: number; message: string; data?: unknown } };
+  let parsed: SseEnvelope;
   if (contentType.includes("text/event-stream")) {
-    parsed = parseSseEnvelope(await response.text());
+    parsed = response.body
+      ? await readSseEnvelope(response.body, jsonRpc.id)
+      : parseSseEnvelope(await response.text(), jsonRpc.id);
   } else {
     parsed = JSON.parse(await response.text());
   }
@@ -188,19 +190,151 @@ export function twentyMcpError(code: number, message: string, data?: unknown): T
   return new TwentyMcpError(code, message, data);
 }
 
-function parseSseEnvelope(text: string): {
+type SseEnvelope = {
   result?: ToolsCallResult;
   error?: { code: number; message: string; data?: unknown };
-} {
-  // Twenty's MCP SSE responses send a single `data:` line containing the
-  // JSON-RPC envelope. We collect the first data-line and parse it.
-  const dataLines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.startsWith("data:"))
-    .map((l) => l.slice(5).trim());
-  if (dataLines.length === 0) {
-    throw new TwentyMcpError(-32603, "no SSE data line in upstream response");
+};
+
+/**
+ * Read the JSON-RPC response for request `requestId` from an SSE body.
+ *
+ * Twenty can send notifications (for example `notifications/progress`) as
+ * events before the response event. A notification carries a `method` or no
+ * `id`; it is skipped. The frame returned is the one whose `id` equals the
+ * request's id and that carries `result` or `error`. When no such frame
+ * exists, the envelope carries neither, and the caller throws
+ * "upstream returned no result". An event whose data is not JSON throws the
+ * parse error.
+ */
+export function parseSseEnvelope(text: string, requestId: string | number): SseEnvelope {
+  const reader = sseEnvelopeReader(requestId);
+  return reader.push(text) ?? reader.end();
+}
+
+/**
+ * Read the JSON-RPC response for request `requestId` from an SSE body stream,
+ * as parseSseEnvelope does, event by event as the body arrives. The stream is
+ * cancelled once the answer is read or the reading throws, so a server that
+ * keeps the stream open after its answer does not hold the call.
+ */
+async function readSseEnvelope(
+  body: ReadableStream<Uint8Array>,
+  requestId: string | number,
+): Promise<SseEnvelope> {
+  const stream = body.getReader();
+  const decoder = new TextDecoder();
+  const reader = sseEnvelopeReader(requestId);
+  let ended = false;
+  try {
+    for (;;) {
+      const { done, value } = await stream.read();
+      if (done) {
+        ended = true;
+        return reader.push(decoder.decode()) ?? reader.end();
+      }
+      const envelope = reader.push(decoder.decode(value, { stream: true }));
+      if (envelope) return envelope;
+    }
+  } finally {
+    if (!ended) void stream.cancel().catch(() => {});
   }
-  return JSON.parse(dataLines[0]);
+}
+
+/**
+ * Read event-stream text by the event-stream rules (HTML Living Standard,
+ * "Interpreting an event stream") and select the response frame from the data
+ * of its events. Text is given in pieces with `push`, cut anywhere; `push`
+ * returns the envelope once the response frame is read, and no later event is
+ * parsed. `end` reads what is left when the text ends: a last line or event
+ * without its line end still counts. It throws when no event carried data.
+ *
+ * A line ends at CRLF, LF or CR. A line that starts with ":" is a comment. The
+ * field name is the text before the first colon, or the whole line when it has
+ * no colon (the value is then empty); one space after the colon is removed from
+ * the value and nothing else is trimmed. Each `data` field adds its value and
+ * a line feed to the event's data; other fields are ignored. A blank line ends
+ * the event: when a data field was seen, the last line feed is removed and the
+ * data is parsed as JSON, which throws for data that is not JSON.
+ */
+function sseEnvelopeReader(requestId: string | number): {
+  push(text: string): SseEnvelope | undefined;
+  end(): SseEnvelope;
+} {
+  let line = "";
+  let afterCr = false;
+  let data = "";
+  let sawData = false;
+  let envelope: SseEnvelope | undefined;
+
+  function dispatch(): void {
+    if (data === "") return;
+    const json = data.slice(0, -1);
+    data = "";
+    sawData = true;
+    const frame: unknown = JSON.parse(json);
+    if (!frame || typeof frame !== "object" || Array.isArray(frame)) return;
+    const f = frame as {
+      id?: unknown;
+      method?: unknown;
+      result?: ToolsCallResult;
+      error?: { code: number; message: string; data?: unknown };
+    };
+    if (f.method !== undefined || f.id === undefined || f.id === null) return;
+    if (f.id !== requestId) return;
+    if (f.result === undefined && f.error === undefined) return;
+    envelope = f.error !== undefined ? { error: f.error } : { result: f.result };
+  }
+
+  function readLine(text: string): void {
+    if (text === "") {
+      dispatch();
+      return;
+    }
+    if (text.startsWith(":")) return;
+    const colon = text.indexOf(":");
+    const field = colon === -1 ? text : text.slice(0, colon);
+    let value = colon === -1 ? "" : text.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "data") data += `${value}\n`;
+  }
+
+  return {
+    push(text) {
+      let start = 0;
+      if (afterCr && text !== "") {
+        if (text[0] === "\n") start = 1;
+        afterCr = false;
+      }
+      const lineEnd = /[\r\n]/g;
+      while (envelope === undefined) {
+        lineEnd.lastIndex = start;
+        const at = lineEnd.exec(text)?.index ?? -1;
+        if (at === -1) {
+          line += text.slice(start);
+          break;
+        }
+        const complete = line + text.slice(start, at);
+        line = "";
+        start = at + 1;
+        if (text[at] === "\r") {
+          if (start === text.length) afterCr = true;
+          else if (text[start] === "\n") start += 1;
+        }
+        readLine(complete);
+      }
+      return envelope;
+    },
+    end() {
+      if (envelope === undefined && line !== "") {
+        readLine(line);
+        line = "";
+      }
+      if (envelope === undefined) dispatch();
+      if (envelope !== undefined) return envelope;
+      if (!sawData) {
+        throw new TwentyMcpError(-32603, "no SSE data line in upstream response");
+      }
+      return {};
+    },
+  };
 }
