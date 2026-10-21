@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 
 import * as contract from "../../../src/twenty-tool-contract.mjs";
 import {
-  canonicalJson, diffRecords, isShape, projectAnswer, recordAndRead, recordedAnswer, sanitize,
+  CONTRACT_PATHS, canonicalJson, diffRecords, isShape, projectAnswer, recordAndRead, recordedAnswer, sanitize,
 } from "../lib/twenty-contract-record.mjs";
 // A namespace import: a name the module does not export reads as undefined in a case, never as a load failure.
 import * as snapshotLib from "../lib/twenty-snapshot.mjs";
@@ -837,6 +837,42 @@ describe("the drift check", () => {
     expect(recordLib.freshFieldCreateRecorded(other)).toBe(false);
     expect(diffRecords(FIXTURES, other)).toMatch(/^create_field_metadata: /);
     expect(recordLib.freshFieldCreateRecorded({ calls: [] })).toBe(false);
+  });
+
+  it("projects every checked field the drift check must see: CONTRACT_PATHS itself names labelSingular, labelPlural, type, viewId, subFieldName and positionInViewFilterGroup on each tool whose answer carries them, and every field of get_view_query_parameters", () => {
+    // Read from CONTRACT_PATHS itself (the drift check's own list), each wanted path derived from ENTRY_FIELDS over
+    // TOOL_ANSWERS: a field the readers check but the projection leaves out can change shape without a drift line.
+    const NAMED = new Set(["labelSingular", "labelPlural", "type", "viewId", "subFieldName", "positionInViewFilterGroup"]);
+    const wanted = (type, prefix, all, out = []) => {
+      const m = /^@(.+?)(\[\])?(\?)?$/.exec(type);
+      if (!m) return out;
+      const base = m[2] ? `${prefix}[0]` : prefix;
+      for (const [field, ft] of Object.entries(contract.ENTRY_FIELDS[m[1]])) {
+        const p = base === "" ? field : `${base}.${field}`;
+        if (ft.startsWith("@")) wanted(ft, p, all, out);
+        else if (all || NAMED.has(field)) out.push(p);
+      }
+      return out;
+    };
+    const required = {};
+    for (const [tool, type] of Object.entries(contract.TOOL_ANSWERS)) {
+      const paths = wanted(type, "", tool === "get_view_query_parameters");
+      if (paths.length) required[tool] = paths;
+    }
+    expect(Object.keys(required)).toEqual(expect.arrayContaining([
+      "get_object_metadata", "get_views", "get_view_filters", "get_view_query_parameters",
+    ]));
+    expect(CONTRACT_PATHS.get_view_query_parameters ?? []).not.toEqual([]);
+    for (const [tool, paths] of Object.entries(required)) {
+      for (const p of paths) expect(CONTRACT_PATHS[tool] ?? [], `${tool}: ${p} is not projected`).toContain(p);
+    }
+    // On the committed fixtures each such path reads a value (null included), never "absent".
+    for (const [tool, paths] of Object.entries(required)) {
+      const c = FIXTURES.calls.find((x) => x.tool === tool && x.answer?.success !== false);
+      expect(c, `no fixture call of ${tool}`).toBeDefined();
+      const projected = projectAnswer(tool, c.answer).paths;
+      for (const p of paths) expect(projected[p], `${tool}: ${p}`).not.toBe("absent");
+    }
   });
 
   it("projects a failure by its failure keys", () => {
