@@ -920,6 +920,9 @@ async function step10_lists(client, nativeTools) {
     if (contract.readListSlug(filters, fieldIds.contact) !== slug) {
       problems.push("get_view_filters: the list slug is not read back from the view's inLists filter");
     }
+    // getListMembers reads the view's own filter: record that answer too, so the fixtures hold it.
+    contract.readViewQuery(await call("get_view_query_parameters", "get_view_query_parameters",
+      contract.getViewQueryParametersArgs(view.id)));
 
     // getListMembers' road: the membership filter, paged — exactly the tagged records.
     const members = async (type, recordId, pageSize) => {

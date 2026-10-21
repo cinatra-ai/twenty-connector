@@ -31,13 +31,16 @@
 // the place (with its index) and the kind, so a malformed answer never reads
 // as an empty one.
 //
-// Lists (the membership model, decided on twenty-connector#83): a list is a
-// Twenty view of people or companies that carries ONE filter
-// `inLists CONTAINS <slug>`; the slug is read back from that filter, never from
-// the view's name. A record is a member of the list when its custom array field
-// `inLists` holds the slug. A view without such a filter is not a list, so a
-// view that already existed in the CRM has no members until records are tagged
-// with a list's slug.
+// Lists (cinatra#3562): a people list is any person view that Twenty's own
+// view picker shows (a TABLE, KANBAN or CALENDAR view; record-page field views
+// are left out), named as Twenty renders it, and its members are the records
+// the view's OWN filter matches (get_view_query_parameters, read twice in full).
+// A filter whose meaning depends on the viewer (the current workspace member or
+// the time zone) refuses by name. A company list keeps the slug rule of
+// twenty-connector#83: a company view that carries ONE filter
+// `inLists CONTAINS <slug>`, whose members are the records whose custom array
+// field `inLists` holds the slug. Every list read runs for the person running
+// it, on Cinatra's Twenty connection as shared with them.
 
 /** The find tools' published input schema caps `limit` at 100. */
 export const FIND_PAGE_LIMIT = 100;
@@ -109,6 +112,11 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** A deep copy of a JSON value (an answer is parsed JSON, so it holds no cycle, function or undefined). */
+function deepCopy(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
 function describeShape(value) {
   if (Array.isArray(value)) return "an array";
   if (value === null) return "null";
@@ -130,6 +138,9 @@ function describeShape(value) {
  *   "true"        exactly true                  "boolean?"  absent, null or a boolean
  *   "string|any"  any JSON value (the source allows any): a string is kept,
  *                 any other value is returned as null and never read
+ *   "json"        any JSON value, present and non-null (returned as a deep copy)
+ *   "number?"     absent, null or a finite number
+ *   "object"      a plain object (returned as a deep copy)
  *   "@kind", "@kind?", "@kind[]", "@kind[]?"  an entry of that kind (absent or
  *                 null allowed with "?"), or an array of such entries
  */
@@ -175,13 +186,24 @@ export const ENTRY_FIELDS = Object.freeze({
   // create_* / update_* run slim: `{ success, result: { id } }`.
   "written answer": Object.freeze({ success: "true", result: "@written" }),
   written: Object.freeze({ id: "id" }),
-  // get_views (view-tools.factory.ts:292-300; view.dto.ts:29-33, both non-null).
-  view: Object.freeze({ id: "id", name: "string" }),
-  // get_view_filters (view-filter-tools.factory.ts:104-112; view-filter.dto.ts:16-23, non-null);
-  // `value` is any JSON value (view-filter-tools.factory.ts:37-44): only a string can be a list slug.
-  "view filter": Object.freeze({ id: "id", fieldMetadataId: "id", operand: "string", value: "string|any" }),
-  // get_object_metadata (object-metadata-tools.factory.ts:113-122; object-metadata.dto.ts:32-39).
-  object: Object.freeze({ id: "id", nameSingular: "string" }),
+  // get_views (view-tools.factory.ts:292-300; view.dto.ts:29-33; view.entity.ts:59-60, :68-74, all non-null).
+  view: Object.freeze({ id: "id", name: "string", type: "string", objectMetadataId: "id" }),
+  // get_view_filters (view-filter-tools.factory.ts:104-112; view-filter.dto.ts:25-35); `value` is any JSON value
+  // (view-filter-tools.factory.ts:37-44): only a string can be a list slug.
+  "view filter": Object.freeze({
+    id: "id",
+    viewId: "id",
+    fieldMetadataId: "id",
+    operand: "string",
+    value: "json",
+    subFieldName: "string?",
+    positionInViewFilterGroup: "number?",
+  }),
+  // get_view_query_parameters (view-tools.factory.ts:303-314; view-query-params.service.ts): the view's own filter,
+  // computed by Twenty's shared converter (computeRecordGqlOperationFilter).
+  "view query": Object.freeze({ objectNameSingular: "string", filter: "object", viewType: "string" }),
+  // get_object_metadata (object-metadata-tools.factory.ts:113-122; object-metadata.dto.ts:32-48, labels non-null).
+  object: Object.freeze({ id: "id", nameSingular: "string", labelSingular: "string", labelPlural: "string" }),
   // get_field_metadata (field-metadata-tools.factory.ts:171-193, the service's entities; field-metadata.dto.ts:62-80
   // id, type and name non-null, :107-109 isActive optional): the type and the active flag decide whether a custom
   // field the connector needs is present.
@@ -206,6 +228,7 @@ export const TOOL_ANSWERS = Object.freeze({
   update_company: "@written answer",
   get_views: "@view[]",
   get_view_filters: "@view filter[]",
+  get_view_query_parameters: "@view query",
   get_object_metadata: "@object[]",
   get_field_metadata: "@field[]",
   create_view: "@created view",
@@ -222,6 +245,9 @@ const FIELD_WANT = {
   true: "true",
   "boolean?": "a boolean",
   "strings?": "an array of strings",
+  json: "a JSON value",
+  "number?": "a number",
+  object: "an object",
 };
 
 const ABSENT = Symbol("absent");
@@ -291,6 +317,9 @@ function checkField(toolName, value, type, field, where, kind, makeError) {
   else if (type === "true") ok = value === true;
   else if (type === "boolean?") ok = typeof value === "boolean";
   else if (type === "strings?") ok = Array.isArray(value) && value.every((s) => typeof s === "string");
+  else if (type === "json") ok = value !== undefined && value !== null;
+  else if (type === "number?") ok = typeof value === "number" && Number.isFinite(value);
+  else if (type === "object") ok = isPlainObject(value);
   else throw new TwentyToolContractError(-32603, `unknown entry field type "${type}"`);
   if (!ok) {
     throw makeError(
@@ -299,6 +328,7 @@ function checkField(toolName, value, type, field, where, kind, makeError) {
     );
   }
   if (type === "count") return Number(value);
+  if (type === "json" || type === "object") return deepCopy(value);
   return Array.isArray(value) ? [...value] : value;
 }
 
@@ -578,6 +608,21 @@ export function getViewFiltersArgs(viewId) {
   return { viewId };
 }
 
+/** get_view_query_parameters: the view's id only (view-tools.factory.ts:39-44). */
+export function getViewQueryParametersArgs(viewId) {
+  return { viewId };
+}
+
+/** get_object_metadata of one object by its id (object-metadata-tools.factory.ts:11-25). */
+export function getObjectMetadataByIdArgs(id) {
+  return { id, limit: 1 };
+}
+
+/** get_field_metadata of one field by its id (field-metadata-tools.factory.ts:171-193). */
+export function getFieldMetadataByIdArgs(id) {
+  return { id, limit: 1 };
+}
+
 export function createViewArgs({ name, objectType }) {
   return { name, objectNameSingular: objectFor(objectType).nameSingular, type: LIST_VIEW_TYPE };
 }
@@ -709,4 +754,228 @@ export async function readAllPages(
     if (offset >= count) return out;
   }
   throw new TwentyToolContractError(-32603, `find paging did not end within ${maxPages} pages`);
+}
+
+// ---------------------------------------------------------------------------
+// People views (cinatra#3562): the view picker's views, their names, their own filter
+// ---------------------------------------------------------------------------
+
+/** The error of one named refusal: `twenty-connector: <key>: <detail>`. */
+export function refusal(makeError, code, key, detail) {
+  return makeError(code, `twenty-connector: ${key}: ${detail}`);
+}
+
+/** One entry of a metadata answer read by its id: exactly one entry whose id is the requested id. */
+export function readOneById(toolName, payload, id, makeError = defaultMakeError) {
+  const entries = readArrayAnswer(toolName, payload, makeError);
+  if (entries.length !== 1 || entries[0].id !== id) {
+    throw makeError(
+      -32603,
+      `${toolName}: expected exactly the one entry ${JSON.stringify(id)}, got ${entries.length} entr${entries.length === 1 ? "y" : "ies"}` +
+        (entries.length === 1 ? ` with id ${JSON.stringify(entries[0].id)}` : ""),
+    );
+  }
+  return entries[0];
+}
+
+/** A get_view_filters answer of one view: every entry must belong to the requested view. */
+export function readViewFilters(payload, viewId, makeError = defaultMakeError) {
+  const entries = readArrayAnswer("get_view_filters", payload, makeError);
+  entries.forEach((f, i) => {
+    if (f.viewId !== viewId) {
+      throw makeError(-32603, `get_view_filters: answer[${i}] belongs to view ${JSON.stringify(f.viewId)}, not ${JSON.stringify(viewId)}`);
+    }
+  });
+  return entries;
+}
+
+/** A get_view_query_parameters answer: `{ objectNameSingular, filter, viewType }` checked and projected. */
+export function readViewQuery(payload, makeError = defaultMakeError) {
+  return readAnswer("get_view_query_parameters", payload, makeError);
+}
+
+/** The view types Twenty's own view picker lists (viewsFromObjectMetadataItemFamilySelector.ts:13-20 leaves out
+ *  FIELDS_WIDGET and TABLE_WIDGET). Case-sensitive: ViewType values are upper case. */
+export const LISTED_VIEW_TYPES = Object.freeze(["TABLE", "KANBAN", "CALENDAR"]);
+
+export function isListedViewType(type) {
+  return typeof type === "string" && LISTED_VIEW_TYPES.includes(type);
+}
+
+function isBlank(value) {
+  return typeof value !== "string" || value.trim() === "";
+}
+
+/**
+ * A view's name as Twenty's front end renders it (resolveViewNamePlaceholders.ts:12-14): one `.replace` of
+ * `{objectLabelPlural}`, then one of `{objectLabelSingular}`. Null (#4159's leave-out) when a used placeholder's
+ * label is blank or the rendered name is blank.
+ */
+export function renderViewName(name, labels) {
+  if (typeof name !== "string") return null;
+  let out = name;
+  if (out.includes("{objectLabelPlural}")) {
+    if (isBlank(labels?.labelPlural)) return null;
+    out = out.replace("{objectLabelPlural}", () => labels.labelPlural);
+  }
+  if (out.includes("{objectLabelSingular}")) {
+    if (isBlank(labels?.labelSingular)) return null;
+    out = out.replace("{objectLabelSingular}", () => labels.labelSingular);
+  }
+  return out.trim() === "" ? null : out;
+}
+
+/** The find filter of a view's own filter: `{}` for a filter with no own keys, else `{ and: [<copy>] }`, so that
+ *  Twenty's filter keys never meet the find tools' `limit`, `offset` and `orderBy` (tool-executor.service.ts:93). */
+export function memberFindFilter(filter, makeError = defaultMakeError) {
+  if (!isPlainObject(filter)) {
+    throw makeError(-32602, `twenty-connector: a view's filter must be an object, not ${describeShape(filter)}`);
+  }
+  if (Object.keys(filter).length === 0) return {};
+  return { and: [deepCopy(filter)] };
+}
+
+/** The operands that take no value (twenty-shared isRecordFilterOperandExpectingValue.ts). */
+const OPERANDS_WITHOUT_VALUE = new Set(["IS_EMPTY", "IS_NOT_EMPTY", "IS_NOT_NULL", "IS_IN_PAST", "IS_IN_FUTURE", "IS_TODAY"]);
+/** The operands whose meaning is "now" in the viewer's time zone. */
+const TIME_ZONE_OPERANDS = new Set(["IS_TODAY", "IS_IN_PAST", "IS_IN_FUTURE"]);
+const RELATION_FIELD_TYPES = new Set(["RELATION", "MORPH_RELATION"]);
+
+/** A value as an object: the value itself, or the object a JSON string holds; else undefined. */
+function asParsedValue(value) {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function selectsCurrentMember(value) {
+  const v = asParsedValue(value);
+  return isPlainObject(v) && v.isCurrentWorkspaceMemberSelected === true;
+}
+
+function isRelationValue(value) {
+  const v = asParsedValue(value);
+  if (Array.isArray(v)) return true;
+  return isPlainObject(v) && Array.isArray(v.selectedRecordIds);
+}
+
+/** Twenty's own parse of a stringified relative date (relativeDateFilterStringifiedSchema.ts:5-6):
+ *  `<DIRECTION>_<amount>_<UNIT>`, then optionally `;;<time zone>;;` and `<first day of the week>;;`. */
+const RELATIVE_DATE_STRINGIFIED =
+  /((?:THIS)|(?:PAST)|(?:NEXT))_(\d*)_(DAY|MONTH|YEAR|WEEK|QUARTER|HOUR|MINUTE|SECOND)(?:(?:;;([^;;]*);;)?(?:(MONDAY|SUNDAY|SATURDAY);;)?)?/;
+
+/** An IS_RELATIVE value names a time zone when Twenty's parse of it captures a non-blank time zone (the part
+ *  right after the first `;;`); a first day of the week alone, or a value Twenty cannot parse, names none. */
+function relativeValueNamesZone(value) {
+  if (typeof value !== "string") return false;
+  const parsed = RELATIVE_DATE_STRINGIFIED.exec(value);
+  return parsed !== null && typeof parsed[4] === "string" && parsed[4].trim() !== "";
+}
+
+/**
+ * The first filter of a view whose meaning depends on the viewer, as `{ key, filterId, detail }`, or null.
+ * The key's actor in Twenty has no workspace member and runs in UTC, so such a filter would answer other
+ * records than the view shows its person. `fieldTypeOf(fieldMetadataId)` (it may be async) is called only for
+ * operand IS. Keys: view-filter-viewer-dependent (V1), view-filter-value-not-text (V3), view-filter-time-zone (V2).
+ */
+export async function viewerDependence(filters, fieldTypeOf) {
+  for (const f of filters) {
+    const operand = String(f.operand ?? "").toUpperCase();
+    if (selectsCurrentMember(f.value)) {
+      return { key: "view-filter-viewer-dependent", filterId: f.id, detail: "it selects the current workspace member" };
+    }
+    if (TIME_ZONE_OPERANDS.has(operand)) {
+      return { key: "view-filter-time-zone", filterId: f.id, detail: `operand ${operand} depends on the viewer's time zone` };
+    }
+    if (!OPERANDS_WITHOUT_VALUE.has(operand) && typeof f.value !== "string") {
+      return { key: "view-filter-value-not-text", filterId: f.id, detail: `operand ${operand} has a value that is not text` };
+    }
+    if (operand === "IS_RELATIVE" && !relativeValueNamesZone(f.value)) {
+      return { key: "view-filter-time-zone", filterId: f.id, detail: "a relative date that names no time zone" };
+    }
+    if (operand === "IS") {
+      const fieldType = await fieldTypeOf(f.fieldMetadataId);
+      if (fieldType === "DATE_TIME") {
+        return { key: "view-filter-time-zone", filterId: f.id, detail: "IS on a date-time field depends on the viewer's time zone" };
+      }
+      if (RELATION_FIELD_TYPES.has(fieldType) && !isRelationValue(f.value)) {
+        return { key: "view-filter-time-zone", filterId: f.id, detail: `IS on a ${fieldType} field with a value that is not a relation value` };
+      }
+    }
+  }
+  return null;
+}
+
+/** The most members a view's read answers (decision D13: two full reads). */
+export const VIEW_MEMBERS_MAX = 100000;
+
+/**
+ * The member ids of a view (cinatra#3562 S10): `callPage({ limit, offset })` resolves to one find page of
+ * `toolName`. Two full passes; every page must hold exactly the records the first page's count leaves to read,
+ * carry the same count, and repeat no id; the second pass must answer the same count and id sequence.
+ * Refusals: view-members-over-max, view-members-changed. No refusal returns a partial list.
+ */
+export async function readMemberIds(
+  callPage,
+  { want = Infinity, pageSize = FIND_PAGE_LIMIT, toolName, makeError = defaultMakeError } = {},
+) {
+  const kind = recordKind(toolName);
+  if (!(want > 0)) return [];
+  const size = Math.max(1, Math.min(FIND_PAGE_LIMIT, Math.floor(pageSize)));
+  const changed = (detail) => refusal(makeError, -32603, "view-members-changed", detail);
+
+  async function pass() {
+    const ids = [];
+    const seen = new Set();
+    let total;
+    let target;
+    let limit = Math.min(size, want);
+    let offset = 0;
+    for (;;) {
+      const page = checkEntry(toolName, await callPage({ limit, offset }), `${kind} page`, "result", makeError);
+      if (total === undefined) {
+        total = page.count;
+        target = Math.min(want, total);
+        if (target > VIEW_MEMBERS_MAX) {
+          throw refusal(makeError, -32603, "view-members-over-max", `the view has ${total} members, more than ${VIEW_MEMBERS_MAX}`);
+        }
+      } else if (page.count !== total) {
+        throw changed(`the count moved from ${total} to ${page.count} during the read`);
+      }
+      const expected = Math.min(limit, target - ids.length);
+      if (page.records.length !== expected) {
+        throw changed(`a page at offset ${offset} held ${page.records.length} records, not ${expected}`);
+      }
+      for (const r of page.records) {
+        if (seen.has(r.id)) throw changed(`record ${r.id} was answered twice`);
+        seen.add(r.id);
+        ids.push(r.id);
+      }
+      if (ids.length >= target) return { total, ids };
+      offset = ids.length;
+      limit = Math.min(size, target - ids.length);
+    }
+  }
+
+  const first = await pass();
+  const second = await pass();
+  if (second.total !== first.total || second.ids.length !== first.ids.length || second.ids.some((id, i) => id !== first.ids[i])) {
+    throw changed("two full reads answered different members");
+  }
+  return first.ids;
+}
+
+/** JSON with the keys of every object sorted, at every depth. */
+export function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map((v) => canonicalJson(v)).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value === undefined ? null : value);
 }

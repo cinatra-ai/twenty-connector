@@ -561,7 +561,7 @@ function stubTwentyMcp(opts: { dataModel?: boolean; existing?: string[]; malform
     let value: unknown;
     if (opts.dataModel === false) value = { success: false, message: `Tool "${toolName}" not found`, error: "not found" };
     else if (toolName === "get_object_metadata")
-      value = [{ id: PERSON_OBJECT, nameSingular: "person" }, { id: COMPANY_OBJECT, nameSingular: "company" }];
+      value = [{ id: PERSON_OBJECT, nameSingular: "person", labelSingular: "Person", labelPlural: "People" }, { id: COMPANY_OBJECT, nameSingular: "company", labelSingular: "Company", labelPlural: "Companies" }];
     else if (toolName === "get_field_metadata")
       value = opts.malformed ? [{ name: "inLists", type: "ARRAY" }] : [...fields[String(args.objectMetadataId)]];
     else if (toolName === "create_field_metadata") {
