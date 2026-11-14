@@ -11,6 +11,10 @@
 // from @cinatra-ai/sdk-ui, the Button from the host-shared primitives, the
 // probe from the connector-local "use server" actions. The state machine is
 // the pure ./connection-check module.
+//
+// initialStatus seeds the state once, at mount. The page keys the island by
+// that same settled status, so a server re-render with a new reading mounts a
+// fresh island instead of keeping a stale badge.
 
 import * as React from "react";
 import { RefreshCw } from "lucide-react";

@@ -80,7 +80,7 @@ import {
 } from "./actions";
 import { TWENTY_SETUP_FLASH_TOASTS } from "./setup-flash";
 import { TWENTY_WORKSPACE_ROW_ID } from "./twenty-mcp-call";
-import { isTwentyWorkspaceConnected } from "./connection-check";
+import { isTwentyWorkspaceConnected, type SettledTwentyConnectionStatus } from "./connection-check";
 import { TwentyConnectionStatus } from "./twenty-connection-status";
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -93,6 +93,11 @@ export async function TwentyConnectorSetupImpl(props?: {
   const viewer = await deps.resolveViewerContext();
   const row = deps.getServerById(TWENTY_WORKSPACE_ROW_ID);
   const connected = isTwentyWorkspaceConnected(row);
+  // The settled status this render read. It seeds the Check island and keys
+  // it: the island holds its status in client state, so a re-render with a
+  // new reading (a refresh after Connect or Disconnect) must remount it with
+  // that reading; a re-render with the same reading keeps it as it is.
+  const settledStatus: SettledTwentyConnectionStatus = connected ? "connected" : "disconnected";
   const instanceUrl = row ? row.serverUrl.replace(/\/mcp$/i, "") : null;
   const connectionServiceReady = deps.isConnectionServiceReady();
   const instanceIsPrivate = instanceUrl ? deps.isPrivateUrl(instanceUrl) : false;
@@ -237,7 +242,7 @@ export async function TwentyConnectorSetupImpl(props?: {
                   Connection status
                 </div>
                 <div className="mt-3.5">
-                  <TwentyConnectionStatus initialStatus={connected ? "connected" : "disconnected"} />
+                  <TwentyConnectionStatus key={settledStatus} initialStatus={settledStatus} />
                 </div>
                 {connected ? (
                   <div className="mt-3 min-w-0">
