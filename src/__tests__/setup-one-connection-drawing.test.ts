@@ -30,7 +30,7 @@ function buttons(): string[] {
 }
 
 function buttonLabelled(label: RegExp): string {
-  const hit = buttons().find((b) => label.test(b.replace(/<[^>]+>/g, "")));
+  const hit = buttons().find((b) => label.test(b.split(/<[^>]*>/).join("")));
   if (!hit) throw new Error(`no <Button> labelled ${label}`);
   return hit;
 }
