@@ -179,7 +179,8 @@ export async function TwentyConnectorSetupImpl(props?: {
                         </FieldDescription>
                       </Field>
                     </FieldGroup>
-                    {/* Actions side by side (spec section II "One connection"): the
+                    {/* Actions side by side, never stacked (spec section II "One
+                        connection"; the row never wraps): the
                         icon-led Connect (joined plug) beside the destructive
                         Disconnect (unplug), which stays disabled until the
                         workspace is connected. Disconnect only opens the host
@@ -187,7 +188,7 @@ export async function TwentyConnectorSetupImpl(props?: {
                         submits the disconnect action. The dialog content is
                         portaled out of this form, so its form is not nested
                         here and never posts the typed key. */}
-                    <div className="flex flex-wrap items-center gap-2.5">
+                    <div className="flex flex-nowrap items-center gap-2.5">
                       <Button type="submit" disabled={!connectionServiceReady}>
                         <PlugConnected aria-hidden="true" />
                         {connected ? "Update connection" : "Connect Twenty"}
