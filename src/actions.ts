@@ -32,6 +32,8 @@
 // propagates through the await unchanged.
 
 import { getTwentyDeps } from "./deps";
+import { isTwentyWorkspaceConnected } from "./connection-check";
+import { TWENTY_WORKSPACE_ROW_ID } from "./twenty-mcp-call";
 
 /** Connect/re-connect the instance-global Twenty workspace (form POST). */
 export async function saveTwentyConnectionAction(formData: FormData): Promise<void> {
@@ -41,4 +43,18 @@ export async function saveTwentyConnectionAction(formData: FormData): Promise<vo
 /** Disconnect: remove the workspace row + the bound Nango connection (form POST). */
 export async function disconnectTwentyConnectionAction(formData: FormData): Promise<void> {
   await getTwentyDeps().disconnectTwentyConnectionAction(formData);
+}
+
+/**
+ * Check: the Connection status card's probe. Re-reads the workspace row at
+ * call time and answers the same connected reading the page renders from. It
+ * resolves the viewer first, as the page does, and returns only the status
+ * (no URL, no key, no row fields).
+ */
+export async function checkTwentyConnectionAction(): Promise<"connected" | "disconnected"> {
+  const deps = getTwentyDeps();
+  await deps.resolveViewerContext();
+  return isTwentyWorkspaceConnected(deps.getServerById(TWENTY_WORKSPACE_ROW_ID))
+    ? "connected"
+    : "disconnected";
 }
