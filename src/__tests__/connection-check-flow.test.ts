@@ -26,6 +26,7 @@ import { checkTwentyConnectionAction } from "../actions";
 import { registerTwentyConnector, _resetTwentyDepsForTests } from "../deps";
 import type { TwentyConnectorHostDeps } from "../deps";
 import { TWENTY_WORKSPACE_ROW_ID } from "../twenty-mcp-call";
+import { stripComments } from "../../extension-kind-gate.mjs";
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -95,6 +96,31 @@ describe("Check flow - the badge shows Checking while the probe runs", () => {
     expect(calls).toBe(0);
     expect(seen).toEqual([]);
   });
+
+  it("a second press while the first probe is pending starts no second probe", async () => {
+    // The island threads its live status into each press; emulate that here.
+    let status: TwentyConnectionStatus = "disconnected";
+    const seen: TwentyConnectionStatus[] = [];
+    const onStatus = (s: TwentyConnectionStatus) => {
+      status = s;
+      seen.push(s);
+    };
+    const first = deferred<"connected" | "disconnected">();
+    let calls = 0;
+    const probe = () => {
+      calls += 1;
+      return first.promise;
+    };
+    const run1 = runConnectionCheck(status, probe, onStatus);
+    expect(status).toBe("checking");
+    const run2 = runConnectionCheck(status, probe, onStatus);
+    expect(await run2).toBeNull();
+    expect(calls).toBe(1);
+    first.resolve("connected");
+    expect(await run1).toBe("connected");
+    expect(calls).toBe(1);
+    expect(seen).toEqual(["checking", "connected"]);
+  });
 });
 
 describe("Check flow - the connected reading is the workspace row", () => {
@@ -155,17 +181,19 @@ describe("Check flow - the client island wires the state to the shared badge", (
     fileURLToPath(new URL("../twenty-connection-status.tsx", import.meta.url)),
     "utf8",
   );
-  const flat = island.replace(/\s+/g, " ");
+  // Comments are stripped, so a commented-out import or call never passes a pin.
+  const code = stripComments(island);
+  const flat = code.replace(/\s+/g, " ");
 
   it("is a client module", () => {
     expect(island.startsWith('"use client";')).toBe(true);
   });
 
   it("takes the badge, the Button and the probe from their shared homes (no local copy)", () => {
-    expect(island).toContain('import { ConnectionStatusBadge, type ConnectionStatus } from "@cinatra-ai/sdk-ui/connection-status-badge";');
-    expect(island).toContain('import { Button } from "@cinatra-ai/design-primitives";');
-    expect(island).toContain('import { checkTwentyConnectionAction } from "./actions";');
-    expect(island).toContain('import { runConnectionCheck } from "./connection-check";');
+    expect(code).toContain('import { ConnectionStatusBadge, type ConnectionStatus } from "@cinatra-ai/sdk-ui/connection-status-badge";');
+    expect(code).toContain('import { Button } from "@cinatra-ai/design-primitives";');
+    expect(code).toContain('import { checkTwentyConnectionAction } from "./actions";');
+    expect(code).toContain('import { runConnectionCheck } from "./connection-check";');
   });
 
   it("the badge renders the island's live status, which the Check press drives through runConnectionCheck", () => {

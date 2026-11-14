@@ -14,6 +14,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../extension-kind-gate.mjs";
 
 const src = readFileSync(
   fileURLToPath(new URL("../twenty-setup-impl.tsx", import.meta.url)),
@@ -55,19 +56,21 @@ describe("setup-page — uses the shared sdk-ui Tabs primitive, no vendored copy
   });
 
   it("composes the shared ConnectorSetupPage/ConnectorSetupColumns/ConnectionStatusBadge shell (extended §II design)", () => {
-    expect(src).toContain(
+    // Comments are stripped, so a commented-out import never passes a pin.
+    const code = stripComments(src);
+    expect(code).toContain(
       'import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";',
     );
-    expect(src).toContain(
+    expect(code).toContain(
       'import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";',
     );
     // The shared badge is drawn by the status card's client island (its
     // transient Checking state is client state), which the page renders.
-    expect(src).toContain(
+    expect(code).toContain(
       'import { TwentyConnectionStatus } from "./twenty-connection-status";',
     );
     expect(
-      readFileSync(fileURLToPath(new URL("../twenty-connection-status.tsx", import.meta.url)), "utf8"),
+      stripComments(readFileSync(fileURLToPath(new URL("../twenty-connection-status.tsx", import.meta.url)), "utf8")),
     ).toContain(
       'import { ConnectionStatusBadge, type ConnectionStatus } from "@cinatra-ai/sdk-ui/connection-status-badge";',
     );

@@ -74,6 +74,25 @@ describe("setup page - Disconnect beside Connect, disabled until connected", () 
     expect(row.indexOf("Connect Twenty")).toBeLessThan(row.indexOf("Disconnect"));
   });
 
+  it("the action row never stacks: an explicit flex-nowrap row, no wrap or column class at any breakpoint", () => {
+    const cls = actionRow().match(/^<div className="([^"]*)">/);
+    expect(cls === null).toBe(false);
+    const tokens = (cls as RegExpMatchArray)[1].split(" ").filter(Boolean);
+    expect(tokens).toContain("flex");
+    expect(tokens).toContain("flex-nowrap");
+    // A variant prefix (sm:, md:, ...) is the part before the last ":".
+    const utilities = tokens.map((t) => t.slice(t.lastIndexOf(":") + 1));
+    for (const u of utilities) {
+      expect(u).not.toMatch(/^(flex-wrap|flex-wrap-reverse|flex-col|flex-col-reverse|grid|block|inline-block)$/);
+    }
+  });
+
+  it("the row holds Connect and then the Disconnect dialog directly, under no condition", () => {
+    const row = actionRow();
+    expect(row).toMatch(/ : "Connect Twenty"\} <\/Button> <AlertDialog> <AlertDialogTrigger asChild>/);
+    expect(row.endsWith("</AlertDialogContent> </AlertDialog> </div>")).toBe(true);
+  });
+
   it("Disconnect is a destructive unplug-led button disabled while not connected", () => {
     const disconnect = buttonLabelled(/^\s*Disconnect\s*$/);
     expect(disconnect).toContain('variant="destructive"');
