@@ -61,8 +61,15 @@ describe("setup-page — uses the shared sdk-ui Tabs primitive, no vendored copy
     expect(src).toContain(
       'import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";',
     );
+    // The shared badge is drawn by the status card's client island (its
+    // transient Checking state is client state), which the page renders.
     expect(src).toContain(
-      'import { ConnectionStatusBadge } from "@cinatra-ai/sdk-ui/connection-status-badge";',
+      'import { TwentyConnectionStatus } from "./twenty-connection-status";',
+    );
+    expect(
+      readFileSync(fileURLToPath(new URL("../twenty-connection-status.tsx", import.meta.url)), "utf8"),
+    ).toContain(
+      'import { ConnectionStatusBadge, type ConnectionStatus } from "@cinatra-ai/sdk-ui/connection-status-badge";',
     );
     // Tabbed page — the tab row owns the section rule, not the header.
     expect(flat).toContain("divider={false}");
@@ -130,7 +137,7 @@ describe("setup-page — content mapping (each tab holds the right content, noth
     // connection — no separate "Connections" tab per the one-connection
     // layout in app-connectors.html §II).
     expect(block).toContain("Connection status");
-    expect(block).toContain("ConnectionStatusBadge");
+    expect(block).toContain("<TwentyConnectionStatus");
   });
 
   it('the "help" tab is read-only — no form, no Save, no server action bindings', () => {

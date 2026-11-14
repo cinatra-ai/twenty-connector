@@ -6,8 +6,15 @@
 //    (destructive, red-on-tint, the unplug from the Disconnected badge)"
 //   "Disconnect is disabled until the connector is connected - there is
 //    nothing to disconnect otherwise."
+//   "Disconnecting is destructive, so it opens an AlertDialog on the --paper
+//    ground with a strong hairline header rule - a Cancel outline beside the
+//    red Disconnect confirm (same unplug icon) - never a bare browser prompt;
+//    its copy stays connector-neutral."
 //   "The right Connection status card ... carries the status badge with both
 //    icon and label plus the Check action beneath it."
+//   "Pressing Check replaces the current badge with the indigo Checking...
+//    badge - its icon spinning - until the probe resolves, then swaps to
+//    Connected or Disconnected."
 //
 // Like the sibling setup-page-tabs pins, these assert against the AUTHORED
 // SOURCE of ../twenty-setup-impl.tsx: the sdk-ui / design-primitives modules
@@ -23,6 +30,13 @@ const src = readFileSync(
   "utf8",
 );
 const flat = src.replace(/\s+/g, " ");
+
+// The Connection status card's badge + Check live in a client island (the
+// Checking state is client state); it sits beside the page.
+const STATUS_ISLAND = "../twenty-connection-status.tsx";
+function islandSource(): string {
+  return readFileSync(fileURLToPath(new URL(STATUS_ISLAND, import.meta.url)), "utf8");
+}
 
 /** Every <Button ...>...</Button> element in source order, whitespace-collapsed. */
 function buttons(): string[] {
@@ -68,33 +82,92 @@ describe("setup page - Disconnect beside Connect, disabled until connected", () 
   });
 
   it("Disconnect is drawn regardless of state (not only inside a connected-only branch)", () => {
-    // The button submits the separate disconnect form by id, so it can sit in
-    // the connect form's row without nesting forms.
-    const disconnect = buttonLabelled(/^\s*Disconnect\s*$/);
-    expect(disconnect).toContain('form="twenty-disconnect"');
-    expect(flat).toMatch(/<form action=\{disconnectTwentyConnectionAction\} id="twenty-disconnect"/);
+    const row = actionRow();
+    expect(row).toContain("<AlertDialogTrigger asChild>");
+    expect(flat).not.toMatch(/\{connected \? \(?\s*<AlertDialog>/);
+  });
+});
+
+describe("setup page - Disconnect confirms through the host AlertDialog", () => {
+  it("imports the AlertDialog family from the host-shared primitives (no local copy)", () => {
+    const imp = flat.match(/import \{([^}]*)\} from "@cinatra-ai\/design-primitives";/);
+    expect(imp === null).toBe(false);
+    for (const name of [
+      "AlertDialog",
+      "AlertDialogTrigger",
+      "AlertDialogContent",
+      "AlertDialogHeader",
+      "AlertDialogTitle",
+      "AlertDialogDescription",
+      "AlertDialogFooter",
+      "AlertDialogCancel",
+    ]) {
+      expect((imp as RegExpMatchArray)[1]).toMatch(new RegExp(`\\b${name}\\b`));
+    }
+  });
+
+  it("the row's Disconnect only opens the dialog: it is the AlertDialog trigger and submits nothing", () => {
+    const row = actionRow();
+    expect(row).toMatch(
+      /<AlertDialog> <AlertDialogTrigger asChild> <Button type="button" variant="destructive" disabled=\{!connected\}> <Unplug aria-hidden="true" \/> Disconnect <\/Button> <\/AlertDialogTrigger>/,
+    );
+    // No direct submit of the disconnect action from the row (the bare road).
+    expect(flat).not.toContain('form="twenty-disconnect"');
+    expect(flat).not.toContain('id="twenty-disconnect"');
+  });
+
+  it("the dialog carries the drawing's connector-neutral copy", () => {
+    expect(flat).toContain("<AlertDialogTitle>Disconnect connector?</AlertDialogTitle>");
+    expect(flat).toContain(
+      "<AlertDialogDescription> Disconnect this connector and remove its saved configuration? It will stop working until you connect it again. </AlertDialogDescription>",
+    );
+  });
+
+  it("Cancel (outline) sits beside the red, unplug-led Disconnect confirm, which alone submits the disconnect action", () => {
+    const content = flat.slice(flat.indexOf("<AlertDialogContent"), flat.indexOf("</AlertDialogContent>"));
+    expect(content).toMatch(
+      /<form action=\{disconnectTwentyConnectionAction\}> <AlertDialogFooter> <AlertDialogCancel>Cancel<\/AlertDialogCancel> <Button type="submit" variant="destructive"> <Unplug aria-hidden="true" \/> Disconnect <\/Button> <\/AlertDialogFooter> <\/form>/,
+    );
+    // The disconnect action is bound exactly once, inside the dialog.
+    expect(flat.split("action={disconnectTwentyConnectionAction}").length - 1).toBe(1);
+    expect(flat.indexOf("action={disconnectTwentyConnectionAction}")).toBeGreaterThan(flat.indexOf("<AlertDialogContent"));
+  });
+
+  it("never falls back to a bare browser prompt", () => {
+    expect(src).not.toMatch(/\bconfirm\(/);
+    expect(src).not.toMatch(/window\.confirm/);
   });
 });
 
 describe("setup page - Connection status card carries Check beneath the badge", () => {
-  it("renders a Check action after the status badge inside the card", () => {
+  it("the card renders the status island (badge + Check) beneath its heading, seeded with the read status", () => {
     const card = flat.slice(flat.indexOf("Connection status </div>"));
-    const badgeIdx = card.indexOf("<ConnectionStatusBadge");
-    const checkIdx = card.search(/>\s*Check\s*<\/Button>/);
+    expect(card).toMatch(/^Connection status <\/div> <div className="mt-3\.5"> <TwentyConnectionStatus initialStatus=\{connected \? "connected" : "disconnected"\} \/> <\/div>/);
+    expect(src).toContain('import { TwentyConnectionStatus } from "./twenty-connection-status";');
+  });
+
+  it("the island draws the shared badge, then Check beneath it", () => {
+    const island = islandSource().replace(/\s+/g, " ");
+    const badgeIdx = island.indexOf("<ConnectionStatusBadge status={status} />");
+    const checkIdx = island.search(/>\s*Check\s*<\/Button>/);
     expect(badgeIdx).toBeGreaterThan(-1);
     expect(checkIdx).toBeGreaterThan(badgeIdx);
   });
 
   it("Check is an outline, refresh-led, full-width button", () => {
-    const check = buttonLabelled(/^\s*Check\s*$/);
-    expect(check).toContain('variant="outline"');
-    expect(check).toContain("w-full");
-    expect(check).toMatch(/>\s*<RefreshCw aria-hidden="true" \/>\s*Check\s*<\/Button>/);
+    const island = islandSource().replace(/\s+/g, " ");
+    const check = (island.match(/<Button\b[^>]*>.*?<\/Button>/g) ?? []).find((b) => /^\s*Check\s*$/.test(b.split(/<[^>]*>/).join("")));
+    expect(typeof check).toBe("string");
+    expect(check as string).toContain('variant="outline"');
+    expect(check as string).toContain("w-full");
+    expect(check as string).toMatch(/>\s*<RefreshCw aria-hidden="true" \/>\s*Check\s*<\/Button>/);
   });
 
-  it("Check re-reads the status by re-requesting this page (a plain GET of the same route; no new server API)", () => {
-    expect(flat).toMatch(/<form method="get"[^>]*>\s*<Button type="submit" variant="outline"[^>]*>\s*<RefreshCw aria-hidden="true" \/>\s*Check\s*<\/Button>\s*<\/form>/);
-    // The page's status read is the workspace row, read on every render.
+  it("the page no longer reloads itself for Check (no plain GET form)", () => {
+    expect(flat).not.toMatch(/<form method="get"/);
+  });
+
+  it("the page's status read is still the workspace row, read on every render", () => {
     expect(src).toContain("deps.getServerById(TWENTY_WORKSPACE_ROW_ID)");
   });
 });
