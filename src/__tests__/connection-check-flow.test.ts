@@ -203,3 +203,40 @@ describe("Check flow - the client island wires the state to the shared badge", (
     expect(flat).toMatch(/<Button type="button" variant="outline" className="w-full justify-center" onClick=\{onCheck\} disabled=\{status === "checking"\}>/);
   });
 });
+
+describe("Check flow - a server re-render with a new reading reaches the badge", () => {
+  // The island copies initialStatus into its state once, at mount. A
+  // same-route refresh after Connect or Disconnect re-renders the page with
+  // the new reading but can keep the island mounted, so the page keys the
+  // island by the settled status it hands it: a changed reading remounts the
+  // island seeded with that reading (a stale in-flight probe then lands on
+  // the unmounted island), while a refresh with the same reading keeps the
+  // island, and a Check in flight, as they are. The island renders
+  // host-provided modules this plain-node sandbox does not resolve, so this
+  // wiring is pinned against the authored sources, comments stripped.
+  const page = stripComments(
+    readFileSync(fileURLToPath(new URL("../twenty-setup-impl.tsx", import.meta.url)), "utf8"),
+  ).replace(/\s+/g, " ");
+  const island = stripComments(
+    readFileSync(fileURLToPath(new URL("../twenty-connection-status.tsx", import.meta.url)), "utf8"),
+  ).replace(/\s+/g, " ");
+
+  it("the page keys the island by the same settled status it seeds it with, read from the workspace row", () => {
+    const m = page.match(/<TwentyConnectionStatus key=\{(\w+)\} initialStatus=\{(\w+)\} \/>/);
+    expect(m === null).toBe(false);
+    const [, key, initial] = m as RegExpMatchArray;
+    expect(key).toBe(initial);
+    expect(page).toContain(`const ${key}: SettledTwentyConnectionStatus = connected ? "connected" : "disconnected";`);
+    expect(page).toContain("const connected = isTwentyWorkspaceConnected(row);");
+  });
+
+  it("the page renders the island once, so no unkeyed copy remains", () => {
+    expect(page.match(/<TwentyConnectionStatus\b/g)?.length).toBe(1);
+  });
+
+  it("the island holds no effect that rewrites its status from the prop: the key is the one reset road", () => {
+    expect(island).not.toMatch(/\buse(Layout|Insertion)?Effect\b/);
+    expect(island.match(/setStatus\(/g) ?? []).toEqual([]);
+    expect(island).toContain("runConnectionCheck(status, checkTwentyConnectionAction, setStatus)");
+  });
+});

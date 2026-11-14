@@ -74,16 +74,18 @@ describe("setup page - Disconnect beside Connect, disabled until connected", () 
     expect(row.indexOf("Connect Twenty")).toBeLessThan(row.indexOf("Disconnect"));
   });
 
-  it("the action row never stacks: an explicit flex-nowrap row, no wrap or column class at any breakpoint", () => {
+  it("the action row never stacks: an explicit flex-nowrap row whose every class is a plain row class (no wrap, column, variant, important or arbitrary form)", () => {
     const cls = actionRow().match(/^<div className="([^"]*)">/);
     expect(cls === null).toBe(false);
     const tokens = (cls as RegExpMatchArray)[1].split(" ").filter(Boolean);
     expect(tokens).toContain("flex");
     expect(tokens).toContain("flex-nowrap");
-    // A variant prefix (sm:, md:, ...) is the part before the last ":".
-    const utilities = tokens.map((t) => t.slice(t.lastIndexOf(":") + 1));
-    for (const u of utilities) {
-      expect(u).not.toMatch(/^(flex-wrap|flex-wrap-reverse|flex-col|flex-col-reverse|grid|block|inline-block)$/);
+    // An allow-list, not a deny-list: a variant prefix (sm:), an important
+    // modifier (!flex-col, flex-wrap!) or an arbitrary property
+    // ([flex-direction:column]) can each re-stack the row, so every class must
+    // be one of these plain, unprefixed row classes.
+    for (const t of tokens) {
+      expect(t).toMatch(/^(flex|flex-nowrap|items-(start|center|end|baseline|stretch)|justify-(start|center|end|between)|gap-(x-)?[0-9]+(\.5)?)$/);
     }
   });
 
@@ -159,9 +161,9 @@ describe("setup page - Disconnect confirms through the host AlertDialog", () => 
 });
 
 describe("setup page - Connection status card carries Check beneath the badge", () => {
-  it("the card renders the status island (badge + Check) beneath its heading, seeded with the read status", () => {
+  it("the card renders the status island (badge + Check) beneath its heading, seeded with the read status and keyed by it", () => {
     const card = flat.slice(flat.indexOf("Connection status </div>"));
-    expect(card).toMatch(/^Connection status <\/div> <div className="mt-3\.5"> <TwentyConnectionStatus initialStatus=\{connected \? "connected" : "disconnected"\} \/> <\/div>/);
+    expect(card).toMatch(/^Connection status <\/div> <div className="mt-3\.5"> <TwentyConnectionStatus key=\{settledStatus\} initialStatus=\{settledStatus\} \/> <\/div>/);
     expect(src).toContain('import { TwentyConnectionStatus } from "./twenty-connection-status";');
   });
 
