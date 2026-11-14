@@ -32,6 +32,9 @@ import "server-only";
 //     card).
 //   • ConnectionStatusBadge — the shared connected/disconnected chip language
 //     (§I connector cards + filter, §II setup-page status card).
+//     It is drawn with the Check action by the client island
+//     ./twenty-connection-status (its transient Checking state is client
+//     state).
 //
 // Tab order: Setup first (this connector has exactly one connection and no
 // other custom config tab), then the reserved Help tab LAST — read-only setup
@@ -42,13 +45,31 @@ import "server-only";
 // Shared form primitives come from the host design module.
 
 import { Suspense } from "react";
+import { Unplug } from "lucide-react";
 
 import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";
 import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
-import { ConnectionStatusBadge } from "@cinatra-ai/sdk-ui/connection-status-badge";
+// The joined plug is the design system's first-party mark (the Connected
+// badge's glyph); it ships from its own sdk-ui subpath, never re-drawn here.
+import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
 import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@cinatra-ai/sdk-ui/tabs";
 import { SearchParamToast } from "@cinatra-ai/sdk-ui/search-param-toast";
-import { Button, Input, FieldGroup, Field, FieldLabel, FieldDescription } from "@cinatra-ai/design-primitives";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+  Button,
+  Input,
+  FieldGroup,
+  Field,
+  FieldLabel,
+  FieldDescription,
+} from "@cinatra-ai/design-primitives";
 import { getTwentyDeps } from "./deps";
 // Connector-local "use server" actions (cinatra#1097): the forms bind these
 // compiler-minted references — never the deps-slot instances, which carry no
@@ -59,6 +80,8 @@ import {
 } from "./actions";
 import { TWENTY_SETUP_FLASH_TOASTS } from "./setup-flash";
 import { TWENTY_WORKSPACE_ROW_ID } from "./twenty-mcp-call";
+import { isTwentyWorkspaceConnected, type SettledTwentyConnectionStatus } from "./connection-check";
+import { TwentyConnectionStatus } from "./twenty-connection-status";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -69,7 +92,12 @@ export async function TwentyConnectorSetupImpl(props?: {
   const deps = getTwentyDeps();
   const viewer = await deps.resolveViewerContext();
   const row = deps.getServerById(TWENTY_WORKSPACE_ROW_ID);
-  const connected = Boolean(row?.enabled && row?.nangoConnectionId);
+  const connected = isTwentyWorkspaceConnected(row);
+  // The settled status this render read. It seeds the Check island and keys
+  // it: the island holds its status in client state, so a re-render with a
+  // new reading (a refresh after Connect or Disconnect) must remount it with
+  // that reading; a re-render with the same reading keeps it as it is.
+  const settledStatus: SettledTwentyConnectionStatus = connected ? "connected" : "disconnected";
   const instanceUrl = row ? row.serverUrl.replace(/\/mcp$/i, "") : null;
   const connectionServiceReady = deps.isConnectionServiceReady();
   const instanceIsPrivate = instanceUrl ? deps.isPrivateUrl(instanceUrl) : false;
@@ -156,27 +184,65 @@ export async function TwentyConnectorSetupImpl(props?: {
                         </FieldDescription>
                       </Field>
                     </FieldGroup>
-                    <div className="flex justify-end">
+                    {/* Actions side by side, never stacked (spec section II "One
+                        connection"; the row never wraps): the
+                        icon-led Connect (joined plug) beside the destructive
+                        Disconnect (unplug), which stays disabled until the
+                        workspace is connected. Disconnect only opens the host
+                        AlertDialog; its red confirm, beside Cancel, alone
+                        submits the disconnect action. The dialog content is
+                        portaled out of this form, so its form is not nested
+                        here and never posts the typed key. */}
+                    <div className="flex flex-nowrap items-center gap-2.5">
                       <Button type="submit" disabled={!connectionServiceReady}>
+                        <PlugConnected aria-hidden="true" />
                         {connected ? "Update connection" : "Connect Twenty"}
                       </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button type="button" variant="destructive" disabled={!connected}>
+                            <Unplug aria-hidden="true" />
+                            Disconnect
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Disconnect connector?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Disconnect this connector and remove its saved
+                              configuration? It will stop working until you
+                              connect it again.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <form action={disconnectTwentyConnectionAction}>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <Button type="submit" variant="destructive">
+                                <Unplug aria-hidden="true" />
+                                Disconnect
+                              </Button>
+                            </AlertDialogFooter>
+                          </form>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </div>
                   </form>
                 </div>
               )
             }
             aside={
-              /* Connection status card (spec §II) — heading over a divider,
-                 the shared connected/disconnected badge language, and (once
-                 connected) the current workspace URL + Disconnect. No Check
-                 action: unlike an OAuth connector this connection has no live
-                 probe to re-run — its state is exactly the workspace row. */
+              /* Connection status card (spec section II): heading over a divider,
+                 the shared connected/disconnected badge language with the Check
+                 action beneath it (the client island: pressing Check shows the
+                 transient Checking badge until the probe re-reads the
+                 workspace row), and (once connected) the current workspace
+                 URL. No key handling. */
               <div className="rounded-panel border border-line bg-surface p-4">
                 <div className="border-b border-line pb-2.5 text-sm font-bold text-foreground">
                   Connection status
                 </div>
                 <div className="mt-3.5">
-                  <ConnectionStatusBadge status={connected ? "connected" : "disconnected"} />
+                  <TwentyConnectionStatus key={settledStatus} initialStatus={settledStatus} />
                 </div>
                 {connected ? (
                   <div className="mt-3 min-w-0">
@@ -186,13 +252,6 @@ export async function TwentyConnectorSetupImpl(props?: {
                         This instance URL is private — reachable by Cinatra
                         server-side, but not by external LLM providers.
                       </p>
-                    ) : null}
-                    {viewer.isAdmin ? (
-                      <form action={disconnectTwentyConnectionAction} className="mt-3">
-                        <Button type="submit" variant="destructive" size="sm" className="w-full">
-                          Disconnect
-                        </Button>
-                      </form>
                     ) : null}
                   </div>
                 ) : null}
