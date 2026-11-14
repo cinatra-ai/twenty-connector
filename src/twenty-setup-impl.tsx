@@ -42,10 +42,14 @@ import "server-only";
 // Shared form primitives come from the host design module.
 
 import { Suspense } from "react";
+import { RefreshCw, Unplug } from "lucide-react";
 
 import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";
 import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
 import { ConnectionStatusBadge } from "@cinatra-ai/sdk-ui/connection-status-badge";
+// The joined plug is the design system's first-party mark (the Connected
+// badge's glyph); it ships from its own sdk-ui subpath, never re-drawn here.
+import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
 import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@cinatra-ai/sdk-ui/tabs";
 import { SearchParamToast } from "@cinatra-ai/sdk-ui/search-param-toast";
 import { Button, Input, FieldGroup, Field, FieldLabel, FieldDescription } from "@cinatra-ai/design-primitives";
@@ -122,6 +126,10 @@ export async function TwentyConnectorSetupImpl(props?: {
                       <code className="font-mono">cinatra setup nango</code> first.
                     </div>
                   ) : null}
+                  {/* Empty target of the Disconnect button below (form=...), so
+                      the button can sit in the connect form's action row
+                      without nesting forms or posting the typed key. */}
+                  <form action={disconnectTwentyConnectionAction} id="twenty-disconnect" />
                   <form action={saveTwentyConnectionAction} className="grid gap-4">
                     <FieldGroup>
                       <Field>
@@ -156,9 +164,23 @@ export async function TwentyConnectorSetupImpl(props?: {
                         </FieldDescription>
                       </Field>
                     </FieldGroup>
-                    <div className="flex justify-end">
+                    {/* Actions side by side (spec section II "One connection"): the
+                        icon-led Connect (joined plug) beside the destructive
+                        Disconnect (unplug), which stays disabled until the
+                        workspace is connected. */}
+                    <div className="flex flex-wrap items-center gap-2.5">
                       <Button type="submit" disabled={!connectionServiceReady}>
+                        <PlugConnected aria-hidden="true" />
                         {connected ? "Update connection" : "Connect Twenty"}
+                      </Button>
+                      <Button
+                        type="submit"
+                        form="twenty-disconnect"
+                        variant="destructive"
+                        disabled={!connected}
+                      >
+                        <Unplug aria-hidden="true" />
+                        Disconnect
                       </Button>
                     </div>
                   </form>
@@ -166,11 +188,13 @@ export async function TwentyConnectorSetupImpl(props?: {
               )
             }
             aside={
-              /* Connection status card (spec §II) — heading over a divider,
-                 the shared connected/disconnected badge language, and (once
-                 connected) the current workspace URL + Disconnect. No Check
-                 action: unlike an OAuth connector this connection has no live
-                 probe to re-run — its state is exactly the workspace row. */
+              /* Connection status card (spec section II): heading over a divider,
+                 the shared connected/disconnected badge language, the Check
+                 action beneath the badge, and (once connected) the current
+                 workspace URL. This connection's state is exactly the
+                 workspace row, which the page reads on every render, so Check
+                 re-reads it with a plain GET of this same page (no new server
+                 API, no key handling). */
               <div className="rounded-panel border border-line bg-surface p-4">
                 <div className="border-b border-line pb-2.5 text-sm font-bold text-foreground">
                   Connection status
@@ -178,6 +202,12 @@ export async function TwentyConnectorSetupImpl(props?: {
                 <div className="mt-3.5">
                   <ConnectionStatusBadge status={connected ? "connected" : "disconnected"} />
                 </div>
+                <form method="get" className="mt-[15px]">
+                  <Button type="submit" variant="outline" className="w-full justify-center">
+                    <RefreshCw aria-hidden="true" />
+                    Check
+                  </Button>
+                </form>
                 {connected ? (
                   <div className="mt-3 min-w-0">
                     <p className="truncate text-xs text-muted-foreground">{instanceUrl}</p>
@@ -186,13 +216,6 @@ export async function TwentyConnectorSetupImpl(props?: {
                         This instance URL is private — reachable by Cinatra
                         server-side, but not by external LLM providers.
                       </p>
-                    ) : null}
-                    {viewer.isAdmin ? (
-                      <form action={disconnectTwentyConnectionAction} className="mt-3">
-                        <Button type="submit" variant="destructive" size="sm" className="w-full">
-                          Disconnect
-                        </Button>
-                      </form>
                     ) : null}
                   </div>
                 ) : null}
